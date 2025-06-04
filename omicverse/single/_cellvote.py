@@ -252,20 +252,23 @@ class CellVote(object):
             Series with the mapped Cell Ontology IDs.
         """
 
-        from ..utils import load_cl_popv_mapping
+        from ..utils import map_celltypes_to_ontology
 
         if cl_obo_file is None:
             raise ValueError("`cl_obo_file` pointing to cl_popv.json must be provided.")
 
-        name2id, id2name = load_cl_popv_mapping(cl_obo_file)
-
-        mapped_id = self.adata.obs[celltype_key].astype(str).str.lower().map(name2id)
-        mapped_name = mapped_id.map(id2name)
+        mapped = map_celltypes_to_ontology(
+            self.adata.obs[celltype_key],
+            cl_obo_file=cl_obo_file,
+            return_name=True,
+        )
 
         if inplace:
-            self.adata.obs[f"{celltype_key}_cl_id"] = mapped_id
-            self.adata.obs[f"{celltype_key}_cl_name"] = mapped_name
-        return mapped_id
+            self.adata.obs[f"{celltype_key}_cl_id"] = mapped["cl_id"]
+            self.adata.obs[f"{celltype_key}_cl_name"] = mapped["cl_name"]
+            return mapped["cl_id"]
+
+        return mapped
 
 
 def get_cluster_celltype(
