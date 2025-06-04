@@ -227,6 +227,46 @@ class CellVote(object):
         adata.obs[result_key] = [i.capitalize() for i in adata.obs[result_key].tolist()]
         return result
 
+    def map_to_cell_ontology(
+        self,
+        celltype_key: str = "CellVote_celltype",
+        cl_obo_file: str | None = None,
+        inplace: bool = True,
+    ):
+        """Map annotated cell types to Cell Ontology identifiers.
+
+        Parameters
+        ----------
+        celltype_key
+            Column in ``adata.obs`` containing the cell type annotations.
+        cl_obo_file
+            Path to ``cl_popv.json`` generated via :func:`ov.popv.create_ontology_resources`.
+            If a directory is provided, ``cl_popv.json`` inside that folder will be used.
+        inplace
+            Store the results in ``adata.obs`` when ``True``. When ``False`` the
+            mapping is returned without modifying ``adata``.
+
+        Returns
+        -------
+        pandas.Series
+            Series with the mapped Cell Ontology IDs.
+        """
+
+        from ..utils import load_cl_popv_mapping
+
+        if cl_obo_file is None:
+            raise ValueError("`cl_obo_file` pointing to cl_popv.json must be provided.")
+
+        name2id, id2name = load_cl_popv_mapping(cl_obo_file)
+
+        mapped_id = self.adata.obs[celltype_key].astype(str).str.lower().map(name2id)
+        mapped_name = mapped_id.map(id2name)
+
+        if inplace:
+            self.adata.obs[f"{celltype_key}_cl_id"] = mapped_id
+            self.adata.obs[f"{celltype_key}_cl_name"] = mapped_name
+        return mapped_id
+
 
 def get_cluster_celltype(
     cluster_celltypes,
