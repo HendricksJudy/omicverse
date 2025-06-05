@@ -39,3 +39,4 @@ from ._cluster import cluster,LDA_topic,filtered,refine_label
 from ._venn import venny4py
 from ._lsi import *
 from ._neighboors import neighbors
+from ._ontology import load_cl_popv_mapping, map_celltypes_to_ontology
