@@ -18,3 +18,5 @@
 - [Multi omics analysis by MOFA](t_mofa)
 - [Multi omics analysis by MOFA and GLUE](t_mofa_glue)
 - [Data integration and batch correction with SIMBA](t_simba)
+- [Consensus annotation with CellVote](t_cellvote.ipynb)
+
