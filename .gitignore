@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+.claude/
+
+# Temporary files
+tmp/
+tmp_*/
+*.tmp
+*.bak
+*.backup
+
+# Git repositories (embedded)
+Skill_Seekers/
+gh_omicverse_clone/
+tmp_omicverse/
+
+# Progress and review archives
+progress_archive/
+review_archive/
+review_read_only.md
+Agent.md
+
+# OS
+.DS_Store
