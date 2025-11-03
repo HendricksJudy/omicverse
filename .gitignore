@@ -29,3 +29,6 @@ tmp_omicverse/
 
 # Local progress log
 progress.json
+
+# Local temp workspace directory for skillseeker
+tmp4compare/
