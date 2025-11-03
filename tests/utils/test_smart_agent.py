@@ -7,13 +7,18 @@ import types
 from pathlib import Path
 from types import MethodType
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = PROJECT_ROOT / "omicverse"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-for name in ["omicverse", "omicverse.utils", "omicverse.utils.smart_agent"]:
+MODULE_NAMES = ["omicverse", "omicverse.utils", "omicverse.utils.smart_agent"]
+ORIGINAL_MODULES = {name: sys.modules.get(name) for name in MODULE_NAMES}
+
+for name in MODULE_NAMES:
     sys.modules.pop(name, None)
 
 omicverse_pkg = types.ModuleType("omicverse")
@@ -38,6 +43,8 @@ smart_agent_module = importlib.util.module_from_spec(smart_agent_spec)
 sys.modules["omicverse.utils.smart_agent"] = smart_agent_module
 assert smart_agent_spec.loader is not None
 smart_agent_spec.loader.exec_module(smart_agent_module)
+utils_pkg.smart_agent = smart_agent_module
+omicverse_pkg.smart_agent = smart_agent_module
 
 OmicVerseAgent = smart_agent_module.OmicVerseAgent
 
@@ -54,6 +61,18 @@ def _build_agent(return_value):
 
     agent.run_async = MethodType(_fake_run_async, agent)
     return agent
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_sys_modules():
+    try:
+        yield
+    finally:
+        for name, module in ORIGINAL_MODULES.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
 
 def test_run_outside_event_loop(monkeypatch):
