@@ -118,7 +118,7 @@ def cmd_validate(args):
     print("-" * 80)
     print(f"Total skills: {stats['total_skills']}")
     print(f"Average tokens: {stats['avg_token_estimate']:.1f}")
-    print(f"Total tokens: {stats['total_token_estimate']}")
+    print(f"Total tokens (estimated): {int(stats['avg_token_estimate'] * stats['total_skills'])}")
     print(f"Categories: {', '.join(stats['categories'])}")
     print()
 
