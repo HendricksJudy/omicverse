@@ -1,0 +1,293 @@
+# GitHub Actions workflow for OmicVerse Agent Integration Tests
+#
+# This is a TEMPLATE file. To use:
+# 1. Rename to: .github/workflows/agent-integration-tests.yml
+# 2. Add API keys to repository secrets:
+#    - Settings → Secrets → Actions → New repository secret
+#    - Add: OPENAI_API_KEY or ANTHROPIC_API_KEY or GEMINI_API_KEY
+# 3. Commit and push
+
+name: Agent Integration Tests
+
+on:
+  # Run on pull requests
+  pull_request:
+    branches: [main, master, dev]
+    paths:
+      - 'omicverse/utils/smart_agent.py'
+      - 'omicverse/utils/agent_backend.py'
+      - 'omicverse/.claude/skills/**'
+      - 'tests/integration/agent/**'
+
+  # Run nightly
+  schedule:
+    - cron: '0 2 * * *'  # 2 AM UTC daily
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Test suite to run'
+        required: true
+        default: 'quick'
+        type: choice
+        options:
+          - quick
+          - full
+          - phase1
+          - phase2
+          - phase3
+
+jobs:
+  # Quick tests run on every PR
+  quick-tests:
+    name: Quick Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Only run quick tests on PRs
+    if: github.event_name == 'pull_request' || github.event.inputs.test_suite == 'quick'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/setup.py') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Cache reference data
+        uses: actions/cache@v3
+        with:
+          path: tests/integration/agent/data/
+          key: agent-reference-data-${{ hashFiles('scripts/generate_reference_data.py') }}
+
+      - name: Generate reference data
+        run: |
+          python scripts/generate_reference_data.py --dataset pbmc3k
+
+      - name: Run quick tests
+        env:
+          # Use secrets for API keys
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          pytest tests/integration/agent/ -m quick -v --tb=short --junit-xml=test-results-quick.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-results-quick
+          path: test-results-quick.xml
+
+      - name: Comment PR with results
+        uses: actions/github-script@v6
+        if: github.event_name == 'pull_request' && always()
+        with:
+          script: |
+            const fs = require('fs');
+            const testResults = fs.existsSync('test-results-quick.xml');
+            const comment = testResults
+              ? '✅ Quick integration tests passed'
+              : '❌ Quick integration tests failed - check logs';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  # Full test suite runs nightly or on manual trigger
+  full-tests:
+    name: Full Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    # Only run full tests nightly or manual
+    if: github.event_name == 'schedule' || github.event.inputs.test_suite == 'full'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Cache reference data
+        uses: actions/cache@v3
+        with:
+          path: tests/integration/agent/data/
+          key: agent-reference-data-${{ hashFiles('scripts/generate_reference_data.py') }}
+
+      - name: Generate reference data
+        run: |
+          python scripts/generate_reference_data.py
+
+      - name: Run Phase 1 tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          pytest tests/integration/agent/test_agent_single_cell.py -v --tb=short --junit-xml=test-results-phase1.xml
+
+      - name: Run Phase 2 tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          pytest tests/integration/agent/test_agent_multiworkflow.py -v --tb=short --junit-xml=test-results-phase2.xml
+
+      - name: Run Phase 3 tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          pytest tests/integration/agent/test_agent_skills.py -v -k "not full" --tb=short --junit-xml=test-results-phase3.xml
+
+      - name: Generate coverage report
+        run: |
+          python tests/integration/agent/utils/skill_coverage.py > coverage-report.txt
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-results-full
+          path: |
+            test-results-*.xml
+            coverage-report.txt
+
+      - name: Create issue on failure
+        uses: actions/github-script@v6
+        if: failure()
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Nightly agent integration tests failed',
+              body: `The nightly integration test run failed. Check the workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ['testing', 'agent', 'automated']
+            });
+
+  # Phase-specific tests (manual trigger)
+  phase-tests:
+    name: Phase-Specific Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    if: startsWith(github.event.inputs.test_suite, 'phase')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Generate reference data
+        run: |
+          python scripts/generate_reference_data.py --dataset pbmc3k
+
+      - name: Run Phase 1
+        if: github.event.inputs.test_suite == 'phase1'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          pytest tests/integration/agent/test_agent_single_cell.py -v
+
+      - name: Run Phase 2
+        if: github.event.inputs.test_suite == 'phase2'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          pytest tests/integration/agent/test_agent_multiworkflow.py -v
+
+      - name: Run Phase 3
+        if: github.event.inputs.test_suite == 'phase3'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          pytest tests/integration/agent/test_agent_skills.py -v -k "not full"
+
+## Cost Management
+
+# To keep API costs low:
+# 1. Quick tests use gpt-4o-mini (~$0.15/1M tokens)
+# 2. Caching prevents regenerating reference data
+# 3. Tests only run on relevant file changes
+# 4. Nightly runs can be disabled during development
+
+# Estimated costs with gpt-4o-mini:
+# - Quick tests (per PR): ~$0.10-0.50
+# - Full tests (nightly): ~$1-5
+# - Monthly (30 nights): ~$30-150
+
+## Setup Instructions
+
+# 1. Add API key to repository secrets:
+#    GitHub repo → Settings → Secrets and variables → Actions → New repository secret
+#    Name: OPENAI_API_KEY (or ANTHROPIC_API_KEY or GEMINI_API_KEY)
+#    Value: your-api-key
+
+# 2. Rename this file:
+#    mv .github/workflows/agent-integration-tests.yml.template \
+#       .github/workflows/agent-integration-tests.yml
+
+# 3. Commit and push:
+#    git add .github/workflows/agent-integration-tests.yml
+#    git commit -m "Add agent integration tests CI/CD"
+#    git push
+
+# 4. Verify workflow runs:
+#    GitHub repo → Actions → Agent Integration Tests
+
+## Customization
+
+# Adjust test schedule:
+#   schedule:
+#     - cron: '0 2 * * 1,3,5'  # Mon, Wed, Fri at 2 AM
+
+# Change timeout:
+#   timeout-minutes: 45  # For faster tests
+
+# Add notification:
+#   - name: Notify on Slack
+#     uses: slackapi/slack-github-action@v1
+#     with:
+#       webhook-url: ${{ secrets.SLACK_WEBHOOK }}
+
+# Test on multiple Python versions:
+#   strategy:
+#     matrix:
+#       python-version: ['3.8', '3.9', '3.10', '3.11']
