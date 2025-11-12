@@ -17,9 +17,11 @@ tests/integration/agent/
 ├── utils/                          # Validation utilities
 │   ├── validators.py               # Output validators
 │   ├── data_generators.py          # Reference data generators
-│   └── comparators.py              # Comparison functions
-├── test_agent_single_cell.py       # Single-cell tests
-├── test_agent_bulk.py              # Bulk RNA-seq tests
+│   ├── comparators.py              # Comparison functions
+│   └── workflow_tracker.py         # Workflow tracking utilities
+├── test_agent_single_cell.py       # Single-cell tests (Phase 1)
+├── test_agent_bulk.py              # Bulk RNA-seq tests (Phase 1)
+├── test_agent_multiworkflow.py     # Multi-step workflows (Phase 2)
 └── pytest.ini                      # Pytest configuration
 ```
 
@@ -87,10 +89,22 @@ pytest tests/integration/agent/ -m single_cell
 pytest tests/integration/agent/ -m bulk
 ```
 
+### Workflow tests only
+
+```bash
+pytest tests/integration/agent/ -m workflow
+```
+
 ### Specific test
 
 ```bash
 pytest tests/integration/agent/test_agent_single_cell.py::test_agent_qc_filtering -v
+```
+
+### Phase 2 multi-workflow tests
+
+```bash
+pytest tests/integration/agent/test_agent_multiworkflow.py -v
 ```
 
 ## Test Markers
@@ -108,22 +122,53 @@ pytest tests/integration/agent/test_agent_single_cell.py::test_agent_qc_filterin
 
 ## Test Coverage
 
-### Phase 1: Foundation Tests (Implemented)
+### Phase 1: Foundation Tests ✅ COMPLETE
 
-Single-cell:
+**Single-cell** (`test_agent_single_cell.py`):
 - ✅ QC filtering (`test_agent_qc_filtering`)
 - ✅ HVG selection (`test_agent_hvg_selection`)
 - ✅ Dimensionality reduction (`test_agent_dimensionality_reduction`)
 - ✅ Clustering (`test_agent_clustering`)
 - ✅ Complete workflow (`test_agent_complete_pbmc3k_workflow`)
 
-Bulk RNA-seq:
+**Bulk RNA-seq** (`test_agent_bulk.py`):
 - ⚠️  DEG analysis (basic structure, needs real data)
 - ⚠️  Gene ID mapping (placeholder)
 
-### Phase 2-5: To Be Implemented
+### Phase 2: Multi-Step Workflows ✅ COMPLETE
+
+**Complex workflows** (`test_agent_multiworkflow.py`):
+- ✅ Cell type annotation workflow (`test_agent_annotation_workflow`)
+  - Preprocessing → Clustering → Annotation
+  - Validates cell type identification for PBMC data
+- ✅ DEG + enrichment workflow (`test_agent_deg_enrichment_workflow`)
+  - DEG analysis → Pathway enrichment
+  - Tests sequential analysis pipeline
+- ✅ Sequential state preservation (`test_agent_preprocessing_clustering_umap_workflow`)
+  - Preprocessing → Clustering → UMAP
+  - Validates data integrity across steps
+- ✅ Marker gene identification (`test_agent_marker_gene_identification_workflow`)
+  - Clustering → Marker gene finding
+  - Validates statistical testing for markers
+- ✅ Error handling workflow (`test_agent_workflow_with_missing_step`)
+  - Tests agent behavior with missing prerequisites
+  - Validates graceful error handling
+
+**Utilities added**:
+- `workflow_tracker.py` - Track and validate multi-step workflows
+  - Pre-defined workflow templates (PBMC, annotation, DEG)
+  - Input/output validation at each step
+  - Execution time tracking
+  - Summary reporting
+
+### Phase 3-5: To Be Implemented
 
 See `docs/testing/agent_integration_tests_plan.md` for full roadmap.
+
+**Remaining phases**:
+- Phase 3: Skill Coverage Tests (individual skill validation)
+- Phase 4: Error Handling and Edge Cases
+- Phase 5: Performance and Robustness
 
 ## Validation Strategy
 
