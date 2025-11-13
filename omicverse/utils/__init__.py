@@ -115,6 +115,12 @@ def __getattr__(name):
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
+# Eagerly register the verifier module so attribute lookups succeed even in
+# environments where module-level ``__getattr__`` is not consulted (e.g., some
+# tooling that directly inspects ``globals()``).
+verifier = _load_verifier_module()
+
+
 # Build __all__ dynamically and ensure verifier is included for type checkers
 __all__ = [name for name in globals() if not name.startswith("_")]
 if 'verifier' not in __all__:
