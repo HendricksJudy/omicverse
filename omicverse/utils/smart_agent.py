@@ -676,13 +676,22 @@ INSTRUCTIONS:
 2. Search the registry above for the most appropriate function
 3. Extract parameters from the request (e.g., "nUMI>500" → tresh={{'nUMIs': 500, ...}})
 4. Generate ONLY the essential code - no complex workflows
-5. Return executable Python code ONLY, no explanations
+5. Return ONLY executable Python code wrapped in ```python fences
 
 IMPORTANT CONSTRAINTS:
 - Generate 1-3 function calls maximum
 - No loops, conditionals, or complex control flow
 - Focus on direct parameter extraction and function execution
 - If this requires multiple steps or a workflow, respond with: "NEEDS_WORKFLOW"
+- All code must be syntactically valid Python
+
+CRITICAL FORMAT REQUIREMENTS:
+- Output ONLY a single ```python code block
+- NO explanations before or after the code
+- NO markdown tables or documentation
+- NO unclosed strings or syntax errors
+- Ensure all strings are properly closed
+- Test that code is valid Python syntax
 
 Examples of GOOD responses:
 ```python
@@ -909,7 +918,7 @@ INSTRUCTIONS:
 3. Use the registry functions to implement each step
 4. Extract parameters from the request
 5. Generate a comprehensive pipeline with proper sequencing
-6. Return executable Python code ONLY, no explanations
+6. Return ONLY executable Python code wrapped in ```python fences
 
 WORKFLOW GUIDELINES:
 - Break down the task into logical steps
@@ -917,12 +926,29 @@ WORKFLOW GUIDELINES:
 - Include comments explaining each major step
 - Add print statements to show progress
 - Handle intermediate results properly
+- All code must be syntactically valid Python
 
-IMPORTANT:
-- This is NOT a simple task - generate a complete workflow
-- Follow the skill guidance if provided
-- Ensure proper sequencing of operations
-- Include validation and progress tracking
+CRITICAL FORMAT REQUIREMENTS:
+- Output ONLY a single ```python code block
+- NO explanations before or after the code
+- NO markdown tables or documentation
+- NO unclosed strings or syntax errors
+- Ensure all triple-quoted strings are properly closed
+- Test that code is valid Python syntax
+
+Example format:
+```python
+import scanpy as sc
+import omicverse as ov
+
+# Step 1: QC filtering
+print("Performing QC...")
+sc.pp.filter_cells(adata, min_counts=500)
+
+# Step 2: Normalization
+print("Normalizing...")
+sc.pp.normalize_total(adata, target_sum=1e4)
+```
 
 Now generate a complete workflow for: "{request}"
 '''
