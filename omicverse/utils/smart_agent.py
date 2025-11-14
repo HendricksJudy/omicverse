@@ -78,7 +78,7 @@ class OmicVerseAgent:
         result_adata = agent.run("quality control with nUMI>500, mito<0.2", adata)
     """
     
-    def __init__(self, model: str = "gpt-5", api_key: Optional[str] = None, endpoint: Optional[str] = None, enable_reflection: bool = True, reflection_iterations: int = 1, enable_result_review: bool = True):
+    def __init__(self, model: str = "gpt-5", api_key: Optional[str] = None, endpoint: Optional[str] = None, enable_reflection: bool = True, reflection_iterations: int = 1, enable_result_review: bool = True, enable_auto_correction: bool = True, max_correction_attempts: int = 3):
         """
         Initialize the OmicVerse Smart Agent.
 
@@ -96,6 +96,10 @@ class OmicVerseAgent:
             Maximum number of reflection iterations (default: 1, range: 1-3)
         enable_result_review : bool, optional
             Enable result review to validate output matches user intent (default: True)
+        enable_auto_correction : bool, optional
+            Enable automatic error correction when code execution fails (default: True)
+        max_correction_attempts : int, optional
+            Maximum number of attempts to correct execution errors (default: 3, range: 1-5)
         """
         print(f" Initializing OmicVerse Smart Agent (internal backend)...")
         
@@ -129,12 +133,16 @@ class OmicVerseAgent:
         self.reflection_iterations = max(1, min(3, reflection_iterations))  # Clamp to 1-3
         # Result review configuration
         self.enable_result_review = enable_result_review
+        # Auto-correction configuration
+        self.enable_auto_correction = enable_auto_correction
+        self.max_correction_attempts = max(1, min(5, max_correction_attempts))  # Clamp to 1-5
         # Token usage tracking at agent level
         self.last_usage = None
         self.last_usage_breakdown: Dict[str, Any] = {
             'generation': None,
             'reflection': [],
             'review': [],
+            'correction': [],
             'total': None
         }
         try:
@@ -177,6 +185,11 @@ class OmicVerseAgent:
                 print(f"   ✅ Result review enabled (output validation & assessment)")
             else:
                 print(f"   ⚡ Result review disabled (no output validation)")
+
+            if self.enable_auto_correction:
+                print(f"   🔧 Auto-correction enabled: max {self.max_correction_attempts} attempt{'s' if self.max_correction_attempts > 1 else ''} (automatic error fixing)")
+            else:
+                print(f"   ⚡ Auto-correction disabled (errors will fail immediately)")
 
             print(f"✅ Smart Agent initialized successfully!")
         except Exception as e:
@@ -781,11 +794,11 @@ Now generate code for: "{request}"
             )
             self.last_usage = self.last_usage_breakdown['total']
 
-        # Execute
+        # Execute with auto-correction
         print(f"   ⚡ Executing code...")
         try:
             original_adata = adata
-            result_adata = self._execute_generated_code(code, adata)
+            result_adata = await self._execute_with_auto_correction(code, adata, request)
             print(f"   ✅ Execution successful!")
             print(f"   📊 Result: {result_adata.shape[0]} cells × {result_adata.shape[1]} genes")
 
@@ -1033,11 +1046,11 @@ Now generate a complete workflow for: "{request}"
             )
             self.last_usage = self.last_usage_breakdown['total']
 
-        # Step 7: Execute workflow
+        # Step 7: Execute workflow with auto-correction
         print(f"   ⚡ Executing workflow...")
         try:
             original_adata = adata
-            result_adata = self._execute_generated_code(code, adata)
+            result_adata = await self._execute_with_auto_correction(code, adata, request)
             print(f"   ✅ Workflow execution successful!")
             print(f"   📊 Result: {result_adata.shape[0]} cells × {result_adata.shape[1]} genes")
 
@@ -1712,6 +1725,178 @@ IMPORTANT:
 
         return sandbox_locals.get("adata", adata)
 
+    async def _execute_with_auto_correction(self, code: str, adata: Any, request: str) -> Any:
+        """
+        Execute code with automatic error correction if enabled.
+
+        This method wraps _execute_generated_code and automatically attempts to fix
+        execution errors by sending the error details back to the LLM for correction.
+
+        Parameters
+        ----------
+        code : str
+            The Python code to execute
+        adata : Any
+            AnnData object to process
+        request : str
+            Original user request (for context in error correction)
+
+        Returns
+        -------
+        Any
+            Processed adata object
+
+        Raises
+        ------
+        Exception
+            If execution fails after all correction attempts
+        """
+
+        if not self.enable_auto_correction:
+            # Auto-correction disabled, execute directly
+            return self._execute_generated_code(code, adata)
+
+        # Try execution with auto-correction
+        current_code = code
+        for attempt in range(self.max_correction_attempts):
+            try:
+                result = self._execute_generated_code(current_code, adata)
+
+                if attempt > 0:
+                    # Code was corrected successfully
+                    print(f"      ✅ Execution successful after {attempt} correction{'s' if attempt > 1 else ''}!")
+
+                return result
+
+            except Exception as e:
+                # Capture the full error details
+                import traceback
+                error_traceback = traceback.format_exc()
+                error_message = str(e)
+
+                if attempt < self.max_correction_attempts - 1:
+                    # Still have attempts left, try to correct
+                    print(f"      ⚠️  Execution error (attempt {attempt + 1}/{self.max_correction_attempts}):")
+                    print(f"         {type(e).__name__}: {error_message}")
+                    print(f"      🔧 Attempting automatic correction...")
+
+                    try:
+                        corrected_code = await self._correct_code_from_error(
+                            original_request=request,
+                            failed_code=current_code,
+                            error_message=error_message,
+                            error_traceback=error_traceback,
+                            attempt_number=attempt + 1
+                        )
+
+                        # Track correction usage
+                        if self._llm.last_usage:
+                            self.last_usage_breakdown['correction'].append(self._llm.last_usage)
+
+                        print(f"      📝 Generated corrected code")
+                        current_code = corrected_code
+
+                    except Exception as correction_error:
+                        print(f"      ❌ Correction failed: {correction_error}")
+                        # Re-raise original execution error
+                        raise e from correction_error
+                else:
+                    # No more attempts left
+                    print(f"      ❌ Execution failed after {self.max_correction_attempts} attempts")
+                    print(f"         Error: {type(e).__name__}: {error_message}")
+                    raise
+
+        # Should never reach here, but just in case
+        return self._execute_generated_code(current_code, adata)
+
+    async def _correct_code_from_error(self, original_request: str, failed_code: str, error_message: str, error_traceback: str, attempt_number: int) -> str:
+        """
+        Use LLM to analyze execution error and generate corrected code.
+
+        Parameters
+        ----------
+        original_request : str
+            The original user request
+        failed_code : str
+            The code that failed execution
+        error_message : str
+            The error message
+        error_traceback : str
+            Full error traceback
+        attempt_number : int
+            Current correction attempt number
+
+        Returns
+        -------
+        str
+            Corrected Python code
+
+        Raises
+        ------
+        ValueError
+            If LLM cannot generate valid corrected code
+        RuntimeError
+            If LLM backend is not initialized
+        """
+
+        # Build error correction prompt
+        correction_prompt = f'''You are an expert Python debugger for OmicVerse. The code you generated has failed execution.
+
+ORIGINAL REQUEST:
+"{original_request}"
+
+FAILED CODE:
+```python
+{failed_code}
+```
+
+ERROR MESSAGE:
+{error_message}
+
+FULL TRACEBACK:
+{error_traceback}
+
+TASK:
+Analyze the error and generate corrected Python code that will execute successfully.
+
+COMMON ISSUES TO CHECK:
+1. **Attribute errors**: Check if objects have the expected attributes (e.g., adata.obs columns exist)
+2. **Type errors**: Ensure correct data types (sparse vs dense matrices, integers vs floats)
+3. **Missing imports**: Add any required imports
+4. **Index errors**: Validate array/list indices
+5. **Key errors**: Check dictionary keys and DataFrame columns exist
+6. **Name errors**: Ensure all variables are defined
+7. **Function signature errors**: Verify function parameters match the API
+8. **Data shape mismatches**: Ensure matrix dimensions are compatible
+
+CRITICAL REQUIREMENTS:
+- Fix the specific error shown in the traceback
+- Maintain the original intent of the code
+- Output ONLY corrected Python code in a ```python block
+- NO explanations, only executable code
+- Ensure the code is syntactically valid
+- Add defensive checks if needed (e.g., check if column exists before using)
+
+CORRECTION ATTEMPT: {attempt_number}
+
+Generate the corrected code now:
+'''
+
+        # Get corrected code from LLM
+        with self._temporary_api_keys():
+            if not self._llm:
+                raise RuntimeError("LLM backend is not initialized")
+
+            response_text = await self._llm.run(correction_prompt)
+            self.last_usage = self._llm.last_usage
+
+        # Extract corrected code
+        try:
+            corrected_code = self._extract_python_code(response_text)
+            return corrected_code
+        except ValueError as exc:
+            raise ValueError(f"Could not extract corrected code: {exc}") from exc
+
     def _build_sandbox_globals(self) -> Dict[str, Any]:
         """Create a restricted global namespace for executing agent code."""
 
@@ -2061,12 +2246,12 @@ Example workflow:
             # Update last_usage to reflect total
             self.last_usage = self.last_usage_breakdown['total']
 
-        # Execute the code locally
+        # Execute the code locally with auto-correction
         print(f"\n⚡ Executing code locally...")
         try:
             # Keep reference to original for review
             original_adata = adata
-            result_adata = self._execute_generated_code(code, adata)
+            result_adata = await self._execute_with_auto_correction(code, adata, request)
             print(f"✅ Code executed successfully!")
             print(f"📊 Result shape: {result_adata.shape[0]} cells × {result_adata.shape[1]} genes")
 
@@ -2339,9 +2524,9 @@ Example workflow:
             }
             return
 
-        # Execute the code
+        # Execute the code with auto-correction
         try:
-            result_adata = self._execute_generated_code(code, adata)
+            result_adata = await self._execute_with_auto_correction(code, adata, request)
             yield {
                 'type': 'result',
                 'content': result_adata,
@@ -2431,7 +2616,7 @@ def list_supported_models(show_all: bool = False) -> str:
     """
     return ModelConfig.list_supported_models(show_all)
 
-def Agent(model: str = "gpt-5", api_key: Optional[str] = None, endpoint: Optional[str] = None, enable_reflection: bool = True, reflection_iterations: int = 1, enable_result_review: bool = True) -> OmicVerseAgent:
+def Agent(model: str = "gpt-5", api_key: Optional[str] = None, endpoint: Optional[str] = None, enable_reflection: bool = True, reflection_iterations: int = 1, enable_result_review: bool = True, enable_auto_correction: bool = True, max_correction_attempts: int = 3) -> OmicVerseAgent:
     """
     Create an OmicVerse Smart Agent instance.
 
@@ -2452,6 +2637,10 @@ def Agent(model: str = "gpt-5", api_key: Optional[str] = None, endpoint: Optiona
         Maximum number of reflection iterations (default: 1, range: 1-3)
     enable_result_review : bool, optional
         Enable result review to validate output matches user intent (default: True)
+    enable_auto_correction : bool, optional
+        Enable automatic error correction when code execution fails (default: True)
+    max_correction_attempts : int, optional
+        Maximum number of attempts to correct execution errors (default: 3, range: 1-5)
 
     Returns
     -------
@@ -2475,6 +2664,12 @@ def Agent(model: str = "gpt-5", api_key: Optional[str] = None, endpoint: Optiona
     >>> # Create agent with only result review (skip code reflection)
     >>> agent = ov.Agent(model="gpt-5", api_key="your-key", enable_reflection=False, enable_result_review=True)
     >>>
+    >>> # Create agent with auto-correction disabled (errors fail immediately)
+    >>> agent = ov.Agent(model="gpt-5", api_key="your-key", enable_auto_correction=False)
+    >>>
+    >>> # Create agent with more correction attempts
+    >>> agent = ov.Agent(model="gpt-5", api_key="your-key", max_correction_attempts=5)
+    >>>
     >>> # Load data
     >>> adata = sc.datasets.pbmc3k()
     >>>
@@ -2487,7 +2682,7 @@ def Agent(model: str = "gpt-5", api_key: Optional[str] = None, endpoint: Optiona
     >>> # Use agent for clustering
     >>> adata = agent.run("leiden clustering resolution=1.0", adata)
     """
-    return OmicVerseAgent(model=model, api_key=api_key, endpoint=endpoint, enable_reflection=enable_reflection, reflection_iterations=reflection_iterations, enable_result_review=enable_result_review)
+    return OmicVerseAgent(model=model, api_key=api_key, endpoint=endpoint, enable_reflection=enable_reflection, reflection_iterations=reflection_iterations, enable_result_review=enable_result_review, enable_auto_correction=enable_auto_correction, max_correction_attempts=max_correction_attempts)
 
 
 # Export the main functions
