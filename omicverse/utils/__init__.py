@@ -85,6 +85,7 @@ from ._neighboors import neighbors
 from . import agent_backend, smart_agent
 from . import verifier as _verifier_module
 from .agent_backend import BackendConfig, OmicVerseLLMBackend, Usage
+from .response_speed import ResponseSpeed, calculate_response_speed
 from .smart_agent import Agent, OmicVerseAgent, list_supported_models
 
 # Python 3.10 compatibility: Provide __getattr__ to dynamically return verifier
@@ -99,6 +100,12 @@ def __getattr__(name):
     if name == 'verifier':
         return _verifier_module
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+
+def __dir__():
+    """Ensure verifier appears in dir(omicverse.utils)."""
+    return sorted(set(list(globals().keys()) + ['verifier']))
+
 
 # Also make verifier accessible via normal attribute access
 verifier = _verifier_module
