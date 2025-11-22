@@ -84,6 +84,8 @@ from ._neighboors import neighbors
 # Store verifier and response_speed modules with private names first to ensure
 # references are preserved for attribute access and patching
 from . import agent_backend, smart_agent
+from importlib import import_module
+
 from . import response_speed as _response_speed_module
 from . import verifier as _verifier_module
 from .agent_backend import BackendConfig, OmicVerseLLMBackend, Usage
@@ -101,12 +103,14 @@ def __getattr__(name):
     """
     if name == 'verifier':
         return _verifier_module
-    if name == 'response_speed':
-        return _response_speed_module
-    if name == 'calculate_response_speed':
-        return _response_speed_module.calculate_response_speed
-    if name == 'ResponseSpeed':
-        return _response_speed_module.ResponseSpeed
+    if name in {'response_speed', 'calculate_response_speed', 'ResponseSpeed'}:
+        module = _get_response_speed_module()
+        if name == 'response_speed':
+            return module
+        if name == 'calculate_response_speed':
+            return module.calculate_response_speed
+        if name == 'ResponseSpeed':
+            return module.ResponseSpeed
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
@@ -120,11 +124,20 @@ def __dir__():
     )
 
 
+def _get_response_speed_module():
+    """Return the response_speed module, importing lazily if necessary."""
+
+    global _response_speed_module
+    if _response_speed_module is None:
+        _response_speed_module = import_module(f"{__name__}.response_speed")
+    return _response_speed_module
+
+
 # Also make verifier and response_speed accessible via normal attribute access
 verifier = _verifier_module
-response_speed = _response_speed_module
-calculate_response_speed = _response_speed_module.calculate_response_speed
-ResponseSpeed = _response_speed_module.ResponseSpeed
+response_speed = _get_response_speed_module()
+calculate_response_speed = response_speed.calculate_response_speed
+ResponseSpeed = response_speed.ResponseSpeed
 
 # Build __all__ dynamically and ensure verifier/response_speed are included
 __all__ = [name for name in globals() if not name.startswith("_")]
