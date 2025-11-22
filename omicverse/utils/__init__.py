@@ -81,8 +81,10 @@ from ._lsi import *
 from ._neighboors import neighbors
 
 # Import smart_agent module to make it accessible and expose key entrypoints
-# Store verifier with a private name first to ensure reference is preserved
+# Store verifier and response_speed modules with private names first to ensure
+# references are preserved for attribute access and patching
 from . import agent_backend, smart_agent
+from . import response_speed as _response_speed_module
 from . import verifier as _verifier_module
 from .agent_backend import BackendConfig, OmicVerseLLMBackend, Usage
 from .response_speed import ResponseSpeed, calculate_response_speed
@@ -99,18 +101,22 @@ def __getattr__(name):
     """
     if name == 'verifier':
         return _verifier_module
+    if name == 'response_speed':
+        return _response_speed_module
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
 def __dir__():
-    """Ensure verifier appears in dir(omicverse.utils)."""
-    return sorted(set(list(globals().keys()) + ['verifier']))
+    """Ensure verifier and response_speed appear in dir(omicverse.utils)."""
+    return sorted(set(list(globals().keys()) + ['verifier', 'response_speed']))
 
 
-# Also make verifier accessible via normal attribute access
+# Also make verifier and response_speed accessible via normal attribute access
 verifier = _verifier_module
+response_speed = _response_speed_module
 
-# Build __all__ dynamically and ensure verifier is included
+# Build __all__ dynamically and ensure verifier/response_speed are included
 __all__ = [name for name in globals() if not name.startswith("_")]
-if 'verifier' not in __all__:
-    __all__.append('verifier')
+for exported_name in ('verifier', 'response_speed'):
+    if exported_name not in __all__:
+        __all__.append(exported_name)

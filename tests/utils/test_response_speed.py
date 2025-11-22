@@ -1,5 +1,7 @@
 """Tests for response speed helper."""
 
+import omicverse.utils as utils
+
 from omicverse.utils import calculate_response_speed
 
 
@@ -36,3 +38,8 @@ def test_rejects_negative_duration():
         assert "end_time" in str(exc)
     else:
         raise AssertionError("Expected ValueError when end_time < start_time")
+
+
+def test_utils_namespace_exports_module_and_callable():
+    assert hasattr(utils, "response_speed")
+    assert utils.calculate_response_speed is calculate_response_speed
