@@ -103,12 +103,21 @@ def __getattr__(name):
         return _verifier_module
     if name == 'response_speed':
         return _response_speed_module
+    if name == 'calculate_response_speed':
+        return calculate_response_speed
+    if name == 'ResponseSpeed':
+        return ResponseSpeed
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
 def __dir__():
     """Ensure verifier and response_speed appear in dir(omicverse.utils)."""
-    return sorted(set(list(globals().keys()) + ['verifier', 'response_speed']))
+    return sorted(
+        set(
+            list(globals().keys())
+            + ['verifier', 'response_speed', 'calculate_response_speed', 'ResponseSpeed']
+        )
+    )
 
 
 # Also make verifier and response_speed accessible via normal attribute access
