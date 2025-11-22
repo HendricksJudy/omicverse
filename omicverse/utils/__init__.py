@@ -104,9 +104,9 @@ def __getattr__(name):
     if name == 'response_speed':
         return _response_speed_module
     if name == 'calculate_response_speed':
-        return calculate_response_speed
+        return _response_speed_module.calculate_response_speed
     if name == 'ResponseSpeed':
-        return ResponseSpeed
+        return _response_speed_module.ResponseSpeed
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
@@ -123,9 +123,16 @@ def __dir__():
 # Also make verifier and response_speed accessible via normal attribute access
 verifier = _verifier_module
 response_speed = _response_speed_module
+calculate_response_speed = _response_speed_module.calculate_response_speed
+ResponseSpeed = _response_speed_module.ResponseSpeed
 
 # Build __all__ dynamically and ensure verifier/response_speed are included
 __all__ = [name for name in globals() if not name.startswith("_")]
-for exported_name in ('verifier', 'response_speed'):
+for exported_name in (
+    'verifier',
+    'response_speed',
+    'calculate_response_speed',
+    'ResponseSpeed',
+):
     if exported_name not in __all__:
         __all__.append(exported_name)
