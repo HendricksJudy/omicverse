@@ -3,6 +3,8 @@ site_name: omicverse Readthedocs
 repo_url: https://github.com/Starlitnightly/omicverse
 site_author: "Zehua Zeng"
 copyright: "Copyright &copy; 2019-2025, 112 Lab, USTB"
+use_directory_urls: true
+#exclude_docs: api/**
 
 
 nav:
@@ -33,6 +35,8 @@ nav:
             - Consensus Non-negative Matrix factorization (cNMF): Tutorials-single/t_cnmf.ipynb
             - Lazy analysis of scRNA-seq: Tutorials-single/t_lazy.ipynb
         - Annotation: 
+            - Reference-free automated single-cell cell type annotation: Tutorials-single/t_anno_noref.ipynb
+            - Reference automated single-cell cell type annotation: Tutorials-single/t_anno_ref.ipynb
             - Automatic cell type annotation with GPT/Other: Tutorials-single/t_gptanno.ipynb
             - Mapping Cell Names to the Cell Ontology: Tutorials-single/t_cellmatch.ipynb
             - Celltype auto annotation with SCSA: Tutorials-single/t_cellanno.ipynb
@@ -75,7 +79,8 @@ nav:
         - Deconvolution:
             - Identifying Pseudo-Spatial Map: Tutorials-space/t_spaceflow.ipynb
             - Spatial deconvolution with reference scRNA-seq: Tutorials-space/t_decov.ipynb
-            - Spatial deconvolution without reference scRNA-seq: Tutorials-space/t_starfysh.ipynb
+            - FlashDeconv (fast, GPU-free deconvolution): Tutorials-space/t_flashdeconv.ipynb
+            - Spatial deconvolution without reference scRNA-seq: Tutorials-space/t_starfysh_new.ipynb
         - Downstream:
             - Spatial transition tensor of single cells: Tutorials-space/t_stt.ipynb
             - Spatial Communication: Tutorials-space/t_commot_flowsig.ipynb
@@ -84,6 +89,7 @@ nav:
     - LLM:
         - Domain Research (dr): Tutorials-llm/t_dr.ipynb
         - Domain Research (dr) — Live Web: Tutorials-llm/t_dr_web.md
+        - ov.Agent PBMC3k: Tutorials-llm/t_ov_agent_pbmc3k.ipynb
         - UCE: Tutorials-llm/t_uce.ipynb
         - scGPT: Tutorials-llm/t_scgpt.ipynb
         - scFoundation: Tutorials-llm/t_scfoundation.ipynb
@@ -95,7 +101,7 @@ nav:
         - Visualization of bulk RNA-seq: Tutorials-plotting/t_visualize_bulk.ipynb
         - Color system: Tutorials-plotting/t_visualize_colorsystem.ipynb
 - GPU Support: GPU_supported_registry_functions.md
-- API documentation: api/index.md
+- API documentation: $api/omicverse.***
 - Release notes: Release_notes.md
 - Developer guild: Developer_guild.md
 
@@ -109,8 +115,23 @@ plugins:
   - mermaid2
   - glightbox
   - plotly
+  - mkapi:
+      config: mkapi_config.py
+      exclude:
+        - omicverse.external
+        - omicverse.external.*
+        - omicverse.llm
+        - omicverse.llm.*
+        - omicverse.nocd 
+        - omicverse.nocd.*
+        - omicverse.ov_skill_seeker
+        - omicverse.ov_skill_seeker.*
+        - omicverse.popv
+        - omicverse.popv.*
+        - omicverse.utils.*
+ 
   - mkdocstrings:
-      enabled: !ENV [ENABLE_MKDOCSTRINGS, true]
+      enabled: !ENV [ENABLE_MKDOCSTRINGS, false]
       custom_templates: templates
       default_handler: python
       handlers:

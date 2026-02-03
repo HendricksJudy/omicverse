@@ -610,6 +610,7 @@ Added and fixed the `anndata-rs` to support million size's datasets (#336)
 - Added enhanced verbose output with device selection information and emoji indicators
 - Added optimal component determination based on variance contribution thresholds in `init_pca()`
 - Added GPU-accelerated SUDE dimensionality reduction in `ov.pp.sude()` with MLX/CUDA support
+- Optimize the `ov.pp.qc` and added ribosome and hb-genes to know more information of data quantity.
 
 ### Datasets Module
 - Complete elimination of scanpy dependencies for faster loading
@@ -625,6 +626,42 @@ Added and fixed the `anndata-rs` to support million size's datasets (#336)
 - Added function registry system with multi-language aliases
 - Added smart API key management and provider-specific configuration
 
+### Bulk Module
+- Added `BayesPrime` and `Scaden` to deconvoluted Bulk RNA-seq's celltype proportion.
+- Added `alignment` to alignment the fastq to counts.
+
+### Single Module
+- Added `ov.single.Annotation` and `ov.single.AnnotationRef` to annotate the cell type automatically.
+- Added `ov.alignment.single` to alignment the scRNA-seq to counts directly.
+
+## v 1.7.9
+
+### PP Module
+- Fixed an HVG issue on `ov.pp.preprocess`.
+
+### Single Module
+- Added `CONCORD` to integrate the single-cell data in `ov.single.batch_correction`
+
+### Space Module
+- Added `FlashDeconv` to perform deconvolution in Visium profile.
+- Added `Banksy` clustering method and update documentation
+
+### Web Module
+- Added `Omicverse-Notebook` and `Omicverse-Web` to analysis data without code.
+
+### Agent Module
+- Added `ov.Agent` to perform the analysis using LLM.
+
+### Pl Module
+- Enhanced categorical legend handling for scatterplot embeddings, including `legend_loc='on data'`.
+
+### Datasets Module
+- Added dataset URLs and expanded data downloading utilities.
+- Improved dataset utilities and refreshed download behaviors.
+
+### Docs
+- Strengthened data handling notes in dotplot and DEG analysis.
+- Updated the scTour clustering tutorial and release notes.
 
 
 
