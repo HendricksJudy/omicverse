@@ -704,6 +704,7 @@ ov.alignment.single(
 ### PP Module
 - Fixed an HVG (Highly Variable Genes) selection issue in `ov.pp.preprocess`
 - Improved preprocessing pipeline stability and accuracy
+- Fixed pca gpu mode supporting with sparse matrix to avoid memory error
 
 ### Single Module
 - Added `CONCORD` method to `ov.single.batch_correction` for single-cell data integration
