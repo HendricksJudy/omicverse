@@ -745,17 +745,10 @@ class SingleCellAnalysis {
 
         // Mobile menu toggle
         const mobileToggle = document.getElementById('mobile-collapse');
-        const menuMiniButton = document.getElementById('menu-mini-button');
-        
+
         if (mobileToggle) {
             mobileToggle.addEventListener('click', () => {
                 this.toggleMobileMenu();
-            });
-        }
-
-        if (menuMiniButton) {
-            menuMiniButton.addEventListener('click', () => {
-                this.toggleMiniMenu();
             });
         }
     }
@@ -1396,11 +1389,6 @@ class SingleCellAnalysis {
     toggleMobileMenu() {
         const navigation = document.querySelector('.nxl-navigation');
         navigation.classList.toggle('open');
-    }
-
-    toggleMiniMenu() {
-        const navigation = document.querySelector('.nxl-navigation');
-        navigation.classList.toggle('mini');
     }
 
     toggleTheme() {
