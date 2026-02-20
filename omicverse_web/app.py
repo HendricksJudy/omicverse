@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file, send_from_directory, make_response
+from flask import Flask, request, jsonify, send_file, send_from_directory, make_response, Response, stream_with_context
 from flask_cors import CORS
 import scanpy as sc
 import numpy as np
@@ -15,10 +15,13 @@ from werkzeug.exceptions import RequestEntityTooLarge
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import threading
+import time
+import uuid
 import base64
 import io
 import traceback
 import asyncio
+import queue
 
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
@@ -33,8 +36,18 @@ from server.data_adaptor.anndata_adaptor import HighPerformanceAnndataAdaptor
 
 warnings.filterwarnings('ignore')
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s:%(name)s:%(message)s'
+)
+
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 CORS(app)
+
+# Disable werkzeug request logging to prevent mixing with code execution output
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)  # Only show errors, not INFO requests
 
 # Configuration
 # No upload size limit - explicitly set to None to satisfy Flask's accessor
@@ -47,6 +60,19 @@ current_adata = None
 current_filename = None
 thread_pool = ThreadPoolExecutor(max_workers=4)
 kernel_lock = threading.Lock()
+
+# Execution state tracking for interrupt support
+execution_state = {
+    'is_executing': False,
+    'interrupt_requested': False,
+    'execution_id': None,
+    'start_time': None
+}
+execution_state_lock = threading.Lock()
+
+# Interrupt configuration
+# Set to False if trace function causes performance issues
+ENABLE_TRACE_INTERRUPT = False  # Disabled by default due to performance issues
 
 
 class InProcessKernelExecutor:
@@ -88,51 +114,146 @@ class InProcessKernelExecutor:
         self._ensure_kernel()
         self.shell.user_ns['adata'] = adata
 
-    def execute(self, code, adata=None, user_ns=None):
+    def execute(self, code, adata=None, user_ns=None, timeout=300, stdout=None, stderr=None):
+        """Execute code with interrupt support.
+
+        Args:
+            code: Python code to execute
+            adata: AnnData object to inject into namespace
+            user_ns: User namespace to use for execution
+            timeout: Maximum execution time in seconds (default 300s/5min)
+            stdout: Optional custom stdout stream (for streaming output)
+            stderr: Optional custom stderr stream (for streaming output)
+
+        Returns:
+            Dictionary with output, error, result, figures, and adata
+
+        Raises:
+            KeyboardInterrupt: When execution is interrupted by user
+        """
         self._ensure_kernel()
+        execution_id = str(uuid.uuid4())
+        timeout_timer = None
+        check_interrupt_handler = None
+
         with kernel_lock:
-            original_ns = self.shell.user_ns
-            if user_ns is not None:
-                self.shell.user_ns = user_ns
-            if adata is not None:
-                self.shell.user_ns['adata'] = adata
-            stdout_buf = io.StringIO()
-            stderr_buf = io.StringIO()
-            before_figs = set(plt.get_fignums())
+            # Set execution state
+            with execution_state_lock:
+                execution_state['is_executing'] = True
+                execution_state['interrupt_requested'] = False
+                execution_state['execution_id'] = execution_id
+                execution_state['start_time'] = time.time()
+
+            # Setup timeout handler
+            if timeout and timeout > 0:
+                def force_interrupt():
+                    with execution_state_lock:
+                        if execution_state['execution_id'] == execution_id:
+                            execution_state['interrupt_requested'] = True
+                            logging.warning(f"Execution timeout reached for {execution_id}")
+
+                timeout_timer = threading.Timer(timeout, force_interrupt)
+                timeout_timer.start()
+
+            # Define interrupt check hook (must accept info parameter from IPython)
+            def check_interrupt(info):
+                with execution_state_lock:
+                    if execution_state['interrupt_requested'] and \
+                       execution_state['execution_id'] == execution_id:
+                        raise KeyboardInterrupt("Execution interrupted by user")
+
+            # Register pre_run_cell event to check for interrupts
+            check_interrupt_handler = check_interrupt
+            self.shell.events.register('pre_run_cell', check_interrupt_handler)
+
+            # Install trace function for fine-grained interrupt checking (if enabled)
+            # This allows interrupting code inside loops but may impact performance
+            # NOTE: Currently disabled by default due to performance issues
+            if ENABLE_TRACE_INTERRUPT:
+                trace_counter = [0]
+                def trace_interrupt(frame, event, arg):
+                    # Only trace 'line' events to reduce overhead
+                    if event != 'line':
+                        return trace_interrupt
+
+                    # Only check every 100 lines to reduce lock contention
+                    trace_counter[0] += 1
+                    if trace_counter[0] % 100 != 0:
+                        return trace_interrupt
+
+                    # Check interrupt flag
+                    with execution_state_lock:
+                        if execution_state['interrupt_requested'] and \
+                           execution_state['execution_id'] == execution_id:
+                            raise KeyboardInterrupt("Execution interrupted by user")
+                    return trace_interrupt
+
+                # Set trace function
+                sys.settrace(trace_interrupt)
+
             try:
-                result = None
-                error_msg = None
-                with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
-                    result = self.shell.run_cell(code, store_history=True)
-                if result.error_before_exec or result.error_in_exec:
-                    err = result.error_before_exec or result.error_in_exec
-                    error_msg = ''.join(traceback.format_exception(err.__class__, err, err.__traceback__))
-                output = stdout_buf.getvalue()
-                stderr = stderr_buf.getvalue()
-
-                figures = []
-                after_figs = set(plt.get_fignums())
-                new_figs = [num for num in after_figs if num not in before_figs]
-                for fig_num in new_figs:
-                    fig = plt.figure(fig_num)
-                    buf = io.BytesIO()
-                    fig.savefig(buf, format='png', bbox_inches='tight')
-                    figures.append(base64.b64encode(buf.getvalue()).decode('ascii'))
-                    plt.close(fig)
-
-                last_result = result.result if result else None
-                adata_value = self.shell.user_ns.get('adata')
-                return {
-                    'output': output,
-                    'stderr': stderr,
-                    'error': error_msg,
-                    'result': last_result,
-                    'figures': figures,
-                    'adata': adata_value
-                }
-            finally:
+                original_ns = self.shell.user_ns
                 if user_ns is not None:
-                    self.shell.user_ns = original_ns
+                    self.shell.user_ns = user_ns
+                if adata is not None:
+                    self.shell.user_ns['adata'] = adata
+
+                # Use provided streams or create new buffers
+                stdout_buf = stdout if stdout is not None else io.StringIO()
+                stderr_buf = stderr if stderr is not None else io.StringIO()
+
+                before_figs = set(plt.get_fignums())
+                try:
+                    result = None
+                    error_msg = None
+                    with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+                        result = self.shell.run_cell(code, store_history=True)
+                    if result.error_before_exec or result.error_in_exec:
+                        err = result.error_before_exec or result.error_in_exec
+                        error_msg = ''.join(traceback.format_exception(err.__class__, err, err.__traceback__))
+                    output = stdout_buf.getvalue()
+                    stderr_output = stderr_buf.getvalue()
+
+                    figures = []
+                    after_figs = set(plt.get_fignums())
+                    new_figs = [num for num in after_figs if num not in before_figs]
+                    for fig_num in new_figs:
+                        fig = plt.figure(fig_num)
+                        buf = io.BytesIO()
+                        fig.savefig(buf, format='png', bbox_inches='tight')
+                        figures.append(base64.b64encode(buf.getvalue()).decode('ascii'))
+                        plt.close(fig)
+
+                    last_result = result.result if result else None
+                    adata_value = self.shell.user_ns.get('adata')
+                    return {
+                        'output': output,
+                        'stderr': stderr_output,
+                        'error': error_msg,
+                        'result': last_result,
+                        'figures': figures,
+                        'adata': adata_value
+                    }
+                finally:
+                    if user_ns is not None:
+                        self.shell.user_ns = original_ns
+            finally:
+                # Cleanup: cancel timeout, unregister hook, clear trace, reset state
+                # Clear trace function first (safe even if not set)
+                if ENABLE_TRACE_INTERRUPT:
+                    sys.settrace(None)
+
+                if timeout_timer is not None:
+                    timeout_timer.cancel()
+                if check_interrupt_handler is not None:
+                    try:
+                        self.shell.events.unregister('pre_run_cell', check_interrupt_handler)
+                    except Exception as e:
+                        logging.warning(f"Failed to unregister interrupt handler: {e}")
+                with execution_state_lock:
+                    execution_state['is_executing'] = False
+                    execution_state['execution_id'] = None
+                    execution_state['start_time'] = None
 
 
 kernel_executor = InProcessKernelExecutor()
@@ -1850,13 +1971,22 @@ def execute_code():
         if not code:
             return jsonify({'error': '没有提供代码'}), 400
         kernel_id = normalize_kernel_id(payload.get('kernel_id'))
+        timeout = payload.get('timeout', 300)  # Default 5 minutes
         executor, ns = get_kernel_context(kernel_id)
-        if kernel_id == 'default.ipynb' and current_adata is None:
-            return jsonify({'error': '没有加载数据。请先上传H5AD文件。'}), 400
+        # No longer require current_adata to be loaded - allow code execution anytime
 
         try:
             shared_adata = current_adata if kernel_id == 'default.ipynb' else None
-            execution = executor.execute(code, shared_adata, user_ns=ns)
+            execution = executor.execute(code, shared_adata, user_ns=ns, timeout=timeout)
+        except KeyboardInterrupt:
+            # Graceful interrupt handling
+            return jsonify({
+                'interrupted': True,
+                'output': 'Execution interrupted by user',
+                'error': None,
+                'figures': [],
+                'success': False
+            }), 200
         except Exception as exc:
             return jsonify({'error': str(exc)}), 500
 
@@ -1905,12 +2035,180 @@ def execute_code():
             'data_updated': data_updated,
             'data_info': data_info,
             'kernel_id': kernel_id,
+            'interrupted': False,
             'success': True
         })
 
     except Exception as e:
         import traceback
         return jsonify({'error': traceback.format_exc()}), 500
+
+
+@app.route('/api/execute_code_stream', methods=['POST'])
+def execute_code_stream():
+    """Execute Python code with streaming output using Server-Sent Events"""
+    global current_adata
+
+    # Get request data
+    try:
+        payload = request.json if request.json else {}
+        code = payload.get('code', '')
+        if not code:
+            return jsonify({'error': '没有提供代码'}), 400
+        kernel_id = normalize_kernel_id(payload.get('kernel_id'))
+        timeout = payload.get('timeout', 300)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+    # Create a queue for streaming output
+    output_queue = queue.Queue()
+
+    # Custom output stream that puts data into queue immediately
+    class StreamOutput:
+        def __init__(self, stream_type='output'):
+            self.stream_type = stream_type
+            self.buffer = io.StringIO()
+
+        def write(self, text):
+            if text:
+                # Put to queue immediately for real-time output
+                output_queue.put((self.stream_type, text))
+                # Also buffer for final result
+                self.buffer.write(text)
+            return len(text) if text else 0
+
+        def flush(self):
+            pass
+
+        def getvalue(self):
+            return self.buffer.getvalue()
+
+    def generate():
+        """Generator function for SSE"""
+        global current_adata, current_adaptor, current_filename
+        try:
+            # Send initial event
+            yield f"data: {json.dumps({'type': 'start'})}\n\n"
+
+            # Get kernel context
+            executor, ns = get_kernel_context(kernel_id)
+
+            # Execute code in a separate thread
+            execution_result = {'done': False, 'error': None, 'result': None, 'figures': [], 'data_info': None}
+
+            def execute_in_thread():
+                global current_adata, current_adaptor, current_filename
+                try:
+                    shared_adata = current_adata if kernel_id == 'default.ipynb' else None
+
+                    # Use custom stdout/stderr with streaming
+                    stdout_stream = StreamOutput('output')
+                    stderr_stream = StreamOutput('stderr')
+
+                    # Execute with streaming - pass streams directly to execute() method
+                    result = executor.execute(code, shared_adata, user_ns=ns, timeout=timeout,
+                                             stdout=stdout_stream, stderr=stderr_stream)
+
+                    # Store result
+                    execution_result['result'] = result
+                    execution_result['done'] = True
+                    output_queue.put(('done', None))
+
+                except KeyboardInterrupt:
+                    output_queue.put(('interrupted', 'Execution interrupted by user'))
+                    execution_result['done'] = True
+                except Exception as e:
+                    import traceback
+                    error_msg = traceback.format_exc()
+                    output_queue.put(('error', error_msg))
+                    execution_result['error'] = error_msg
+                    execution_result['done'] = True
+
+            # Start execution thread
+            exec_thread = threading.Thread(target=execute_in_thread)
+            exec_thread.daemon = True
+            exec_thread.start()
+
+            # Stream output from queue
+            while not execution_result['done']:
+                try:
+                    # Get output with timeout
+                    event_type, data = output_queue.get(timeout=0.1)
+
+                    if event_type == 'output':
+                        yield f"data: {json.dumps({'type': 'output', 'text': data})}\n\n"
+                    elif event_type == 'stderr':
+                        yield f"data: {json.dumps({'type': 'stderr', 'text': data})}\n\n"
+                    elif event_type == 'error':
+                        yield f"data: {json.dumps({'type': 'error', 'text': data})}\n\n"
+                    elif event_type == 'interrupted':
+                        yield f"data: {json.dumps({'type': 'interrupted', 'text': data})}\n\n"
+                    elif event_type == 'done':
+                        break
+
+                except queue.Empty:
+                    # Send keepalive
+                    yield ": keepalive\n\n"
+                    continue
+
+            # Wait for thread to finish
+            exec_thread.join(timeout=1.0)
+
+            # Send final result
+            if execution_result['error']:
+                yield f"data: {json.dumps({'type': 'error', 'text': execution_result['error']})}\n\n"
+            elif execution_result['result']:
+                result_data = execution_result['result']
+
+                # Process result
+                output_text = result_data.get('output', '')
+                result_value = result_data.get('result')
+                figures = result_data.get('figures', [])
+                error_msg = result_data.get('error')
+
+                if result_value is not None:
+                    output_text += f"\nOut: {result_value}"
+
+                # Check for data updates
+                data_updated = False
+                data_info = None
+                new_adata = result_data.get('adata')
+                if kernel_id == 'default.ipynb' and new_adata is not None:
+                    current_adata = new_adata
+                    data_updated = True
+                    try:
+                        # Create adaptor if needed
+                        if current_adaptor is None:
+                            current_adaptor = HighPerformanceAnndataAdaptor(current_adata)
+                        else:
+                            sync_adaptor_with_adata()
+
+                        # Sync to kernel
+                        kernel_executor.sync_adata(current_adata)
+
+                        # Prepare data info
+                        data_info = {
+                            'filename': current_filename or 'Updated from code',
+                            'n_cells': current_adata.n_obs,
+                            'n_genes': current_adata.n_vars,
+                            'embeddings': [emb.replace('X_', '') for emb in current_adata.obsm.keys()],
+                            'obs_columns': list(current_adata.obs.columns),
+                            'var_columns': list(current_adata.var.columns)
+                        }
+                    except Exception:
+                        pass
+
+                # Send completion event
+                yield f"data: {json.dumps({'type': 'complete', 'output': output_text, 'figures': figures, 'error': error_msg, 'data_updated': data_updated, 'data_info': data_info})}\n\n"
+
+        except Exception as e:
+            import traceback
+            error_msg = traceback.format_exc()
+            logging.error(f"Stream execution failed: {error_msg}")
+            yield f"data: {json.dumps({'type': 'error', 'text': error_msg})}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
 
 @app.route('/api/kernel/list', methods=['GET'])
 def kernel_list():
@@ -1947,6 +2245,134 @@ def kernel_select():
     else:
         kernel_names[kernel_id] = name
     return jsonify({'current': name, 'kernel_id': kernel_id})
+
+@app.route('/api/kernel/load_adata', methods=['POST'])
+def kernel_load_adata():
+    """Load an AnnData object from kernel variables to visualization"""
+    global current_adata, current_filename
+
+    print("=" * 80)
+    print("=== KERNEL LOAD ADATA ENDPOINT CALLED ===")
+    print("=" * 80)
+    logging.info("=" * 80)
+    logging.info("=== kernel_load_adata endpoint called ===")
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        var_name = payload.get('var_name')
+        kernel_id = normalize_kernel_id(payload.get('kernel_id'))
+
+        logging.info(f"Request payload: var_name={var_name}, kernel_id={kernel_id}")
+
+        if not var_name:
+            return jsonify({'error': 'Missing variable name'}), 400
+
+        # Get kernel context and retrieve the variable
+        executor, ns = get_kernel_context(kernel_id)
+        executor._ensure_kernel()
+
+        # Resolve the variable (handle paths like 'obj.adata')
+        value = resolve_var_path(var_name, ns)
+
+        # Check if it's an AnnData object
+        if value is None:
+            return jsonify({'error': f'Variable "{var_name}" not found'}), 404
+
+        if value.__class__.__name__ != 'AnnData':
+            return jsonify({'error': f'Variable "{var_name}" is not an AnnData object (type: {type(value).__name__})'}), 400
+
+        # Load the AnnData to current_adata
+        current_adata = value
+        current_filename = f'{var_name} (from kernel)'
+        logging.info(f"Loaded AnnData from variable '{var_name}': {current_adata.shape}")
+
+        # Create adaptor if needed (similar to upload endpoint)
+        global current_adaptor
+        try:
+            current_adaptor = HighPerformanceAnndataAdaptor(current_adata)
+            logging.info(f"Created adaptor successfully")
+        except Exception as e:
+            logging.error(f"Failed to create adaptor: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            # Fallback: just sync if adaptor exists
+            if current_adaptor is not None:
+                try:
+                    sync_adaptor_with_adata()
+                except Exception:
+                    pass
+            # Re-raise if adaptor creation completely failed
+            return jsonify({'error': f'Failed to create data adaptor: {str(e)}'}), 500
+
+        # Sync back to kernel namespace if needed
+        try:
+            if kernel_id == 'default.ipynb':
+                kernel_executor.sync_adata(current_adata)
+        except Exception:
+            pass
+
+        # Return data info
+        data_info = {
+            'filename': current_filename,
+            'n_cells': current_adata.n_obs,
+            'n_genes': current_adata.n_vars,
+            'embeddings': [emb.replace('X_', '') for emb in current_adata.obsm.keys()],
+            'obs_columns': list(current_adata.obs.columns),
+            'var_columns': list(current_adata.var.columns)
+        }
+
+        return jsonify({
+            'success': True,
+            'message': f'Loaded {var_name} to visualization',
+            'data_info': data_info
+        })
+
+    except Exception as e:
+        import traceback
+        logging.error(f"Load AnnData from variable failed: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/kernel/interrupt', methods=['POST'])
+def kernel_interrupt():
+    """Request interrupt of current execution"""
+    try:
+        with execution_state_lock:
+            if not execution_state['is_executing']:
+                return jsonify({'error': 'No code is currently executing'}), 400
+
+            execution_state['interrupt_requested'] = True
+            interrupted_id = execution_state['execution_id']
+
+        # Give it a moment to interrupt gracefully
+        time.sleep(0.1)
+
+        return jsonify({
+            'success': True,
+            'execution_id': interrupted_id,
+            'message': 'Interrupt signal sent'
+        })
+    except Exception as e:
+        logging.error(f"Interrupt failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kernel/status', methods=['GET'])
+def kernel_execution_status():
+    """Get current execution status"""
+    try:
+        with execution_state_lock:
+            status = {
+                'is_executing': execution_state['is_executing'],
+                'execution_id': execution_state['execution_id'],
+                'interrupt_requested': execution_state['interrupt_requested']
+            }
+            if execution_state['start_time']:
+                status['elapsed_seconds'] = time.time() - execution_state['start_time']
+
+        return jsonify(status)
+    except Exception as e:
+        logging.error(f"Status check failed: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/export_plot_data', methods=['POST'])
 def export_plot_data():

@@ -21,6 +21,14 @@ class SingleCellAnalysis {
         this.contextTargetIsDir = true;
         this.contextClipboard = null;
 
+        // Execution state tracking for interrupt support
+        this.isExecuting = false;
+        this.executionAbortController = null;
+        this.executionStatusPollInterval = null;
+
+        // Track last focused cell for toolbar run button
+        this.lastFocusedCellId = null;
+
         // Initialize high-performance components
         this.dataManager = new DataManager();
         this.webglScatterplot = null;
@@ -290,6 +298,7 @@ class SingleCellAnalysis {
                 'var.preview50': 'Preview 50x50',
                 'var.dataframeLabel': 'DataFrame',
                 'var.anndataLabel': 'AnnData',
+                'var.loadToViz': 'Load to Visualization',
                 'parameter.none': 'No parameters required.',
                 'view.agentTitle': 'Agent Chat',
                 'view.codeTitle': 'Python Code Editor',
@@ -554,6 +563,7 @@ class SingleCellAnalysis {
                 'var.preview50': '预览 50x50',
                 'var.dataframeLabel': 'DataFrame',
                 'var.anndataLabel': 'AnnData',
+                'var.loadToViz': '加载到可视化',
                 'parameter.none': '该工具无需参数设置',
                 'view.agentTitle': 'Agent 对话',
                 'view.codeTitle': 'Python 代码编辑器',
@@ -3105,9 +3115,9 @@ class SingleCellAnalysis {
         const cellId = `cell-${this.cellCounter}`;
 
         const cellHtml = `
-            <div class="code-cell" id="${cellId}">
+            <div class="code-cell" id="${cellId}" data-cell-counter="${this.cellCounter}">
                 <div class="code-cell-header">
-                    <span class="cell-number">In [${this.cellCounter}]:</span>
+                    <span class="cell-number">In [ ]:</span>
                     <div class="cell-toolbar">
                         <select class="form-select form-select-sm" onchange="singleCellApp.changeCellType('${cellId}', this.value)">
                             <option value="code" data-i18n="cell.typeCode">Code</option>
@@ -3176,6 +3186,10 @@ class SingleCellAnalysis {
                 this.runCodeCell(cellId);
             }
         });
+        // Track last focused cell for toolbar run button
+        textarea.addEventListener('focus', () => {
+            this.lastFocusedCellId = cellId;
+        });
         textarea.addEventListener('input', () => this.updateCodeHighlight(textarea, highlight));
         textarea.addEventListener('scroll', () => {
             const highlightContainer = document.querySelector(`#${cellId} .code-highlight`);
@@ -3227,6 +3241,25 @@ class SingleCellAnalysis {
         }
     }
 
+    // Update cell execution number display
+    updateCellNumber(cellId, status) {
+        const cell = document.getElementById(cellId);
+        if (!cell) return;
+
+        const cellNumber = cell.querySelector('.cell-number');
+        if (!cellNumber) return;
+
+        const cellCounter = cell.dataset.cellCounter || '';
+
+        if (status === 'executing') {
+            cellNumber.textContent = 'In [*]:';
+        } else if (status === 'complete') {
+            cellNumber.textContent = `In [${cellCounter}]:`;
+        } else if (status === 'idle') {
+            cellNumber.textContent = 'In [ ]:';
+        }
+    }
+
     runCodeCell(cellId) {
         return this.runCodeCellPromise(cellId);
     }
@@ -3252,13 +3285,29 @@ class SingleCellAnalysis {
             return Promise.resolve();
         }
 
+        // Create AbortController for this execution
+        this.executionAbortController = new AbortController();
+
+        // Update cell number to executing state
+        this.updateCellNumber(cellId, 'executing');
+
         // Show loading
         outputDiv.className = 'code-cell-output has-content';
         outputDiv.textContent = this.t('status.executing');
 
-        // Execute code on backend
+        // Show interrupt button and start polling status
+        this.showInterruptButton();
+        this.startExecutionStatusPolling();
+
+        // Execute code on backend with streaming
         const kernelId = this.getActiveKernelId();
-        return fetch('/api/execute_code', {
+
+        // Variables to track output across promise chain
+        let accumulatedOutput = '';
+        let figures = [];
+
+        // Use streaming endpoint for real-time output
+        return fetch('/api/execute_code_stream', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -3266,42 +3315,239 @@ class SingleCellAnalysis {
             body: JSON.stringify({
                 code: code,
                 kernel_id: kernelId
-            })
+            }),
+            signal: this.executionAbortController.signal
+        })
+        .then(async response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            // Clear output div for streaming
+            outputDiv.className = 'code-cell-output has-content';
+            outputDiv.textContent = '';
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let hasError = false;
+
+            while (true) {
+                const {done, value} = await reader.read();
+
+                if (done) break;
+
+                // Decode chunk
+                buffer += decoder.decode(value, {stream: true});
+
+                // Process SSE messages
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep incomplete line in buffer
+
+                for (const line of lines) {
+                    if (!line.trim() || line.startsWith(':')) continue;
+
+                    if (line.startsWith('data: ')) {
+                        const data = JSON.parse(line.substring(6));
+                        // Debug logging (uncomment for debugging)
+                        // console.log('SSE event:', data.type, data.text ? data.text.substring(0, 50) : '');
+
+                        if (data.type === 'output' || data.type === 'stderr') {
+                            // Append output in real-time
+                            accumulatedOutput += data.text;
+                            this.renderCodeOutput(outputDiv, {
+                                text: accumulatedOutput,
+                                isError: data.type === 'stderr',
+                                figures: figures
+                            });
+                        } else if (data.type === 'error') {
+                            accumulatedOutput += data.text;
+                            hasError = true;
+                            this.renderCodeOutput(outputDiv, {
+                                text: data.text,
+                                isError: true,
+                                figures: []
+                            });
+                        } else if (data.type === 'interrupted') {
+                            // Append interrupted message to accumulated output
+                            accumulatedOutput += '\n⚠️ ' + data.text;
+                            this.renderCodeOutput(outputDiv, {
+                                text: accumulatedOutput,
+                                isError: false,
+                                figures: figures
+                            });
+                        } else if (data.type === 'complete') {
+                            // Final result
+                            if (data.figures && data.figures.length > 0) {
+                                figures = data.figures;
+                            }
+
+                            if (data.error) {
+                                this.renderCodeOutput(outputDiv, {
+                                    text: data.error,
+                                    isError: true,
+                                    figures: figures
+                                });
+                            } else {
+                                const finalOutput = data.output || accumulatedOutput || this.t('status.noOutput');
+                                this.renderCodeOutput(outputDiv, {
+                                    text: finalOutput,
+                                    isError: false,
+                                    figures: figures
+                                });
+                            }
+
+                            if (data.data_updated && data.data_info) {
+                                this.refreshDataFromKernel(data.data_info);
+                            }
+
+                            // Update cell number to complete state
+                            this.updateCellNumber(cellId, 'complete');
+                        }
+                    }
+                }
+            }
+
+            // Hide interrupt button and stop polling
+            this.hideInterruptButton();
+            this.stopExecutionStatusPolling();
+
+            // Update cell number to complete state if not already done
+            this.updateCellNumber(cellId, 'complete');
+        })
+        .catch(error => {
+            // Hide interrupt button and stop polling
+            this.hideInterruptButton();
+            this.stopExecutionStatusPolling();
+
+            if (error.name === 'AbortError') {
+                // Append cancel message to accumulated output instead of overwriting
+                if (accumulatedOutput) {
+                    accumulatedOutput += '\n⚠️ Request cancelled';
+                } else {
+                    accumulatedOutput = '⚠️ Request cancelled';
+                }
+                this.renderCodeOutput(outputDiv, {
+                    text: accumulatedOutput,
+                    isError: false,
+                    figures: figures
+                });
+            } else {
+                this.renderCodeOutput(outputDiv, {
+                    text: `${this.t('common.error')}: ${error.message}`,
+                    isError: true,
+                    figures: []
+                });
+            }
+
+            // Update cell number to complete state
+            this.updateCellNumber(cellId, 'complete');
+        });
+    }
+
+    interruptExecution() {
+        if (!this.isExecuting) {
+            return;
+        }
+
+        // Disable interrupt button to prevent double-clicks
+        const interruptBtn = document.getElementById('interrupt-btn');
+        if (interruptBtn) {
+            interruptBtn.disabled = true;
+            interruptBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Interrupting...';
+        }
+
+        // Send interrupt request to backend
+        fetch('/api/kernel/interrupt', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
         })
         .then(response => response.json())
         .then(data => {
             if (data.error) {
-                this.renderCodeOutput(outputDiv, {
-                    text: data.error,
-                    isError: true,
-                    figures: data.figures || []
-                });
+                console.error('Interrupt failed:', data.error);
+                this.addToLog('Interrupt failed: ' + data.error, 'error');
             } else {
-                let output = '';
-                if (data.output) output += data.output;
-                if (data.result !== null && data.result !== undefined) {
-                    if (output) output += '\n';
-                    output += `Out: ${data.result}`;
-                }
-                if (data.data_updated) {
-                    this.refreshDataFromKernel(data.data_info);
-                }
-                this.renderCodeOutput(outputDiv, {
-                    text: output || this.t('status.noOutput'),
-                    isError: false,
-                    figures: data.figures || []
-                });
+                this.addToLog('Execution interrupted');
             }
         })
         .catch(error => {
-            this.renderCodeOutput(outputDiv, {
-                text: `${this.t('common.error')}: ${error.message}`,
-                isError: true,
-                figures: []
-            });
+            console.error('Interrupt request failed:', error);
+            this.addToLog('Interrupt request failed', 'error');
+        })
+        .finally(() => {
+            // Abort the fetch request immediately for faster UI response
+            if (this.executionAbortController) {
+                this.executionAbortController.abort();
+            }
         });
     }
 
+    showInterruptButton() {
+        this.isExecuting = true;
+        const btn = document.getElementById('interrupt-btn');
+        if (btn) {
+            btn.style.display = 'inline-block';
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-stop"></i> <span data-i18n="toolbar.interrupt">Interrupt</span>';
+        }
+    }
+
+    hideInterruptButton() {
+        this.isExecuting = false;
+        const btn = document.getElementById('interrupt-btn');
+        if (btn) {
+            btn.style.display = 'none';
+        }
+    }
+
+    startExecutionStatusPolling() {
+        // Poll execution status every 500ms to update UI
+        this.executionStatusPollInterval = setInterval(() => {
+            fetch('/api/kernel/status')
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.is_executing) {
+                        // Execution finished, stop polling
+                        this.stopExecutionStatusPolling();
+                        this.hideInterruptButton();
+                    } else if (data.elapsed_seconds) {
+                        // Update elapsed time display
+                        const btn = document.getElementById('interrupt-btn');
+                        if (btn && data.elapsed_seconds > 5) {
+                            btn.title = `Running for ${Math.floor(data.elapsed_seconds)}s`;
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.error('Status poll failed:', err);
+                });
+        }, 500);
+    }
+
+    stopExecutionStatusPolling() {
+        if (this.executionStatusPollInterval) {
+            clearInterval(this.executionStatusPollInterval);
+            this.executionStatusPollInterval = null;
+        }
+    }
+
+    // Run the currently focused cell (or first cell if none focused)
+    runCurrentCell() {
+        if (this.codeCells.length === 0) {
+            return;
+        }
+
+        // Run the last focused cell, or the first cell if no cell was focused
+        const cellToRun = this.lastFocusedCellId || this.codeCells[0];
+        if (cellToRun && document.getElementById(cellToRun)) {
+            this.runCodeCell(cellToRun);
+        }
+    }
+
+    // Run all cells sequentially
     runAllCells() {
         if (this.codeCells.length === 0) {
             return;
@@ -3803,6 +4049,18 @@ class SingleCellAnalysis {
                 layers: ${(detail.summary.layers || []).join(', ') || '—'}
             `;
             varView.appendChild(list);
+
+            // Add "Load to Visualization" button
+            const loadBtn = document.createElement('button');
+            loadBtn.className = 'btn btn-sm btn-primary mt-3';
+            loadBtn.innerHTML = `<i class="feather-eye"></i> ${this.t('var.loadToViz')}`;
+            loadBtn.onclick = () => {
+                console.log('=== Load to Visualization button CLICKED ===');
+                console.log('Variable name:', detail.name);
+                this.loadAnndataToVisualization(detail.name);
+            };
+            varView.appendChild(loadBtn);
+            console.log('Load to Visualization button created for:', detail.name);
             return;
         }
 
@@ -3810,6 +4068,109 @@ class SingleCellAnalysis {
         pre.className = 'code-output-text';
         pre.textContent = detail.content || '';
         varView.appendChild(pre);
+    }
+
+    loadAnndataToVisualization(varName) {
+        console.log('=== loadAnndataToVisualization CALLED ===');
+        console.log('varName:', varName);
+
+        if (!varName) {
+            console.error('No varName provided');
+            return;
+        }
+
+        const kernelId = this.getActiveKernelId();
+        console.log('kernelId:', kernelId);
+
+        if (!kernelId) {
+            console.error('No active kernel');
+            this.addToLog('No active kernel', 'error');
+            return;
+        }
+
+        // Show loading notification
+        this.addToLog('Loading AnnData to visualization...');
+        console.log('Sending request to /api/kernel/load_adata');
+
+        fetch('/api/kernel/load_adata', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                var_name: varName,
+                kernel_id: kernelId
+            })
+        })
+        .then(response => {
+            console.log('Response status:', response.status);
+            console.log('Response ok:', response.ok);
+            return response.json();
+        })
+        .then(data => {
+            if (data.error) {
+                console.error('Load AnnData error:', data.error);
+                this.addToLog(`Failed to load: ${data.error}`, 'error');
+                return;
+            }
+
+            if (data.success && data.data_info) {
+                console.log('Successfully loaded AnnData:', data.data_info);
+
+                // Update UI with loaded data
+                this.addToLog(`Successfully loaded ${varName} to visualization`);
+
+                // Switch to visualization view FIRST
+                this.switchView('visualization');
+
+                // Ensure visualization controls are shown (like updateUI does)
+                const uploadSection = document.getElementById('upload-section');
+                const vizControls = document.getElementById('viz-controls');
+                const vizPanel = document.getElementById('viz-panel');
+
+                if (uploadSection) {
+                    uploadSection.style.display = 'none';
+                    console.log('Hid upload section');
+                }
+                if (vizControls) {
+                    vizControls.style.display = 'block';
+                    console.log('Showed viz controls');
+                }
+                if (vizPanel) {
+                    vizPanel.style.display = 'block';
+                    console.log('Showed viz panel');
+                }
+
+                // Refresh data info display
+                this.refreshDataFromKernel(data.data_info);
+
+                // Fetch gene list for autocomplete
+                if (this.fetchGeneList) {
+                    this.fetchGeneList();
+                }
+
+                // Manually trigger plot update after view switch
+                setTimeout(() => {
+                    const embeddingSelect = document.getElementById('embedding-select');
+                    if (embeddingSelect && embeddingSelect.value) {
+                        console.log('Triggering plot update with embedding:', embeddingSelect.value);
+                        this.updatePlot();
+                    } else if (data.data_info.embeddings && data.data_info.embeddings.length > 0) {
+                        // Auto-select first embedding if available
+                        embeddingSelect.value = data.data_info.embeddings[0];
+                        console.log('Auto-selected embedding:', data.data_info.embeddings[0]);
+                        this.updatePlot();
+                    }
+                }, 300);
+            } else {
+                console.error('Unexpected response:', data);
+                this.addToLog('Unexpected response from server', 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Load AnnData exception:', error);
+            this.addToLog(`Error: ${error.message}`, 'error');
+        });
     }
 
     toggleSection(sectionId) {

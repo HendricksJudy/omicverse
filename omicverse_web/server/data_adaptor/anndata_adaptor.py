@@ -25,8 +25,14 @@ class HighPerformanceAnndataAdaptor:
     and FlatBuffers serialization for fast client-server communication
     """
 
-    def __init__(self, data_path: str, chunk_size: int = 50000):
-        self.data_path = data_path
+    def __init__(self, data_path_or_adata, chunk_size: int = 50000):
+        """
+        Initialize adaptor with either a file path or an AnnData object
+
+        Args:
+            data_path_or_adata: Either a string file path or an AnnData object
+            chunk_size: Chunk size for data operations
+        """
         self.chunk_size = chunk_size
         self.adata = None
         self.n_obs = 0
@@ -38,6 +44,16 @@ class HighPerformanceAnndataAdaptor:
         self._expression_cache = {}
         self._embedding_cache = {}
 
+        # Check if input is AnnData object or file path
+        if isinstance(data_path_or_adata, str):
+            self.data_path = data_path_or_adata
+            self._from_file = True
+        else:
+            # Assume it's an AnnData object
+            self.data_path = None
+            self._from_file = False
+            self.adata = data_path_or_adata
+
         # Load data
         self._load_data()
         self._build_indexes()
@@ -45,8 +61,21 @@ class HighPerformanceAnndataAdaptor:
     def _load_data(self):
         """Load AnnData with optimizations"""
         try:
-            logger.info(f"Loading data from {self.data_path}")
-            self.adata = sc.read_h5ad(self.data_path)
+            if self._from_file:
+                # Load from file path
+                logger.info(f"Loading data from {self.data_path}")
+                self.adata = sc.read_h5ad(self.data_path)
+            else:
+                # Use existing AnnData object
+                logger.info(f"Loading data from AnnData object with n_obs × n_vars = {self.adata.n_obs} × {self.adata.n_vars}")
+                # Log basic info
+                obs_info = ', '.join([f"'{col}'" for col in list(self.adata.obs.columns)[:5]])
+                var_info = ', '.join([f"'{col}'" for col in list(self.adata.var.columns)[:5]])
+                obsm_info = ', '.join([f"'{key}'" for key in list(self.adata.obsm.keys())[:5]])
+                logger.info(f"    obs: {obs_info}")
+                logger.info(f"    var: {var_info}")
+                logger.info(f"    obsm: {obsm_info}")
+
             self.n_obs = self.adata.n_obs
             self.n_vars = self.adata.n_vars
             logger.info(f"Loaded data: {self.n_obs} cells, {self.n_vars} genes")
