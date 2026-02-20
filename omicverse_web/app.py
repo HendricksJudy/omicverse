@@ -2356,6 +2356,52 @@ def kernel_interrupt():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/kernel/restart', methods=['POST'])
+def kernel_restart():
+    """Restart the kernel - clear all variables and reset state"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        kernel_id = normalize_kernel_id(payload.get('kernel_id', 'default.ipynb'))
+
+        logging.info(f"Restarting kernel: {kernel_id}")
+
+        # Get the kernel executor
+        executor, ns = get_kernel_context(kernel_id)
+
+        # Clear the namespace (remove all user variables)
+        # Keep built-in variables and imports
+        user_vars = [key for key in list(ns.keys()) if not key.startswith('_') and key not in ['In', 'Out', 'get_ipython', 'exit', 'quit']]
+        for var in user_vars:
+            del ns[var]
+
+        # Clear execution state
+        with execution_state_lock:
+            execution_state['is_executing'] = False
+            execution_state['interrupt_requested'] = False
+            execution_state['execution_id'] = None
+            execution_state['start_time'] = None
+
+        # Clear global current_adata if this is the default kernel
+        global current_adata, current_adaptor, current_filename
+        if kernel_id == 'default.ipynb':
+            current_adata = None
+            current_adaptor = None
+            current_filename = None
+
+        logging.info(f"Kernel {kernel_id} restarted successfully")
+
+        return jsonify({
+            'success': True,
+            'message': f'Kernel {kernel_id} restarted',
+            'cleared_vars': len(user_vars)
+        })
+
+    except Exception as e:
+        import traceback
+        logging.error(f"Kernel restart failed: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/kernel/status', methods=['GET'])
 def kernel_execution_status():
     """Get current execution status"""

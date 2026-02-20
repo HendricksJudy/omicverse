@@ -1201,6 +1201,92 @@
             animation: none;
             opacity: 0.5;
         }
+
+        /* JupyterLab-like scrolling behavior - allow scrolling past last cell */
+        #code-cells-container {
+            padding-bottom: 80vh !important; /* Add extra space at bottom for comfortable scrolling */
+        }
+
+        /* ========================================
+           完全重写布局系统 - JupyterLab式可调整侧边栏
+           ======================================== */
+
+        :root {
+            --sidebar-width: 260px; /* 默认侧边栏宽度，由JS动态更新 */
+        }
+
+        /* 侧边栏 - 固定定位 */
+        .nxl-navigation {
+            position: fixed !important;
+            left: 0 !important;
+            top: 0 !important;
+            bottom: 0 !important;
+            width: var(--sidebar-width) !important;
+            z-index: 1000 !important;
+            overflow-y: auto !important;
+            transition: width 0.05s ease !important;
+        }
+
+        /* 顶栏 - 固定定位，左边距跟随侧边栏 */
+        .nxl-header {
+            position: fixed !important;
+            top: 0 !important;
+            left: var(--sidebar-width) !important;
+            right: 0 !important;
+            z-index: 999 !important;
+            margin-left: 0 !important;
+            transition: left 0.05s ease !important;
+        }
+
+        .header-wrapper {
+            margin-left: 0 !important;
+            padding-left: 0 !important;
+        }
+
+        /* 主内容容器 - 左边距跟随侧边栏，顶部跟随header */
+        .nxl-container {
+            margin-left: var(--sidebar-width) !important;
+            margin-top: 120px !important; /* header高度 */
+            transition: margin-left 0.05s ease !important;
+            padding-left: 0 !important;
+        }
+
+        .nxl-content {
+            margin-left: 0 !important;
+            padding-left: 15px !important;
+        }
+
+        /* 拖拽手柄 */
+        .sidebar-resize-handle {
+            position: fixed !important;
+            left: calc(var(--sidebar-width) - 2.5px) !important;
+            top: 0 !important;
+            bottom: 0 !important;
+            width: 5px !important;
+            cursor: col-resize !important;
+            z-index: 10000 !important;
+            background: transparent !important;
+            transition: left 0.05s ease, background 0.2s !important;
+        }
+
+        .sidebar-resize-handle:hover,
+        .sidebar-resize-handle.resizing {
+            background: rgba(59, 130, 246, 0.6) !important;
+        }
+
+        body.resizing-sidebar {
+            user-select: none !important;
+        }
+
+        body.resizing-sidebar * {
+            cursor: col-resize !important;
+        }
+
+        /* 确保侧边栏内容不超出 */
+        .navbar-wrapper {
+            width: 100% !important;
+            max-width: var(--sidebar-width) !important;
+        }
     </style>
 </head>
 
@@ -1394,6 +1480,8 @@
                 </div>
             </div>
         </div>
+        <!-- Resizable sidebar handle (JupyterLab-like) -->
+        <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
     </nav>
     <div class="file-context-menu" id="file-context-menu">
         <div class="file-context-menu-item" data-action="new-file" onclick="singleCellApp.contextNewFile()" data-i18n="context.newFile">New File</div>
@@ -1610,6 +1698,14 @@
                                 title="Stop execution"
                                 data-i18n-title="toolbar.interrupt">
                             <i class="fas fa-stop"></i> <span data-i18n="toolbar.interrupt">Interrupt</span>
+                        </button>
+                        <button type="button"
+                                class="btn btn-sm btn-outline-warning"
+                                id="restart-kernel-btn"
+                                onclick="singleCellApp.restartKernel()"
+                                title="Restart kernel"
+                                data-i18n-title="toolbar.restartKernel">
+                            <i class="fas fa-redo"></i>
                         </button>
                     </div>
                     <div class="code-toolbar-separator"></div>

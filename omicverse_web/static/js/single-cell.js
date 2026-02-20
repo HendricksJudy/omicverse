@@ -47,6 +47,7 @@ class SingleCellAnalysis {
         this.setupAgentConfig();
         this.setupAgentChat();
         this.setupKernelSelector();
+        this.setupSidebarResize(); // JupyterLab-like resizable sidebar
         this.checkStatus();
         this.selectAnalysisCategory('preprocessing');
         this.applyCodeFontSize();
@@ -753,6 +754,75 @@ class SingleCellAnalysis {
             menuMiniButton.addEventListener('click', () => {
                 this.toggleMiniMenu();
             });
+        }
+    }
+
+    setupSidebarResize() {
+        // JupyterLab-like resizable sidebar using CSS variables
+        const handle = document.getElementById('sidebar-resize-handle');
+        const sidebar = document.querySelector('.nxl-navigation');
+
+        if (!handle || !sidebar) return;
+
+        let isResizing = false;
+        let startX = 0;
+        let startWidth = 0;
+        const minWidth = 200;  // Minimum sidebar width
+        const maxWidth = 600;  // Maximum sidebar width
+
+        // Function to update CSS variable for sidebar width
+        const setSidebarWidth = (width) => {
+            document.documentElement.style.setProperty('--sidebar-width', width + 'px');
+        };
+
+        handle.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startX = e.clientX;
+
+            // Get current width from CSS variable
+            const currentWidth = getComputedStyle(document.documentElement)
+                .getPropertyValue('--sidebar-width');
+            startWidth = parseInt(currentWidth);
+
+            // Add visual feedback
+            handle.classList.add('resizing');
+            document.body.classList.add('resizing-sidebar');
+
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+
+            const delta = e.clientX - startX;
+            const newWidth = Math.min(Math.max(startWidth + delta, minWidth), maxWidth);
+
+            // Update CSS variable - this updates all elements using var(--sidebar-width)
+            setSidebarWidth(newWidth);
+
+            e.preventDefault();
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (!isResizing) return;
+
+            isResizing = false;
+            handle.classList.remove('resizing');
+            document.body.classList.remove('resizing-sidebar');
+
+            // Save the width to localStorage
+            const currentWidth = getComputedStyle(document.documentElement)
+                .getPropertyValue('--sidebar-width');
+            localStorage.setItem('omicverse.sidebarWidth', parseInt(currentWidth));
+        });
+
+        // Restore saved width on load
+        const savedWidth = localStorage.getItem('omicverse.sidebarWidth');
+        if (savedWidth) {
+            const width = parseInt(savedWidth);
+            if (width >= minWidth && width <= maxWidth) {
+                setSidebarWidth(width);
+            }
         }
     }
 
@@ -3033,6 +3103,9 @@ class SingleCellAnalysis {
             if (vizToolbar) vizToolbar.style.display = 'flex';
             if (codeToolbarRow) codeToolbarRow.style.display = 'none';
 
+            // Scroll to top when switching to visualization view (JupyterLab-like behavior)
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+
             // Update page title
             if (pageTitle) pageTitle.textContent = this.t('breadcrumb.title');
             if (breadcrumbTitle) breadcrumbTitle.textContent = this.t('breadcrumb.title');
@@ -3181,9 +3254,97 @@ class SingleCellAnalysis {
 
         textarea.addEventListener('input', autoResize);
         textarea.addEventListener('keydown', (e) => {
+            // Shift+Enter: Run cell and create new cell below (JupyterLab-like behavior)
             if (e.shiftKey && e.key === 'Enter') {
                 e.preventDefault();
                 this.runCodeCell(cellId);
+
+                // After running, focus next cell or create new one
+                setTimeout(() => {
+                    const currentIndex = this.codeCells.indexOf(cellId);
+                    if (currentIndex === -1) return;
+
+                    if (currentIndex === this.codeCells.length - 1) {
+                        // Last cell - create new empty cell below
+                        this.addCodeCell();
+                        // Focus the newly created cell
+                        const newCellId = this.codeCells[this.codeCells.length - 1];
+                        const newCell = document.getElementById(newCellId);
+                        if (newCell) {
+                            const newTextarea = newCell.querySelector('.code-input');
+                            if (newTextarea) {
+                                newTextarea.focus();
+                            }
+                        }
+                    } else {
+                        // Not last cell - focus next cell
+                        const nextCellId = this.codeCells[currentIndex + 1];
+                        const nextCell = document.getElementById(nextCellId);
+                        if (nextCell) {
+                            const nextTextarea = nextCell.querySelector('.code-input');
+                            if (nextTextarea) {
+                                nextTextarea.focus();
+                            }
+                        }
+                    }
+                }, 100); // Small delay to ensure cell execution started
+                return;
+            }
+
+            // Tab: Indent
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                const value = textarea.value;
+
+                if (start === end) {
+                    // No selection - insert 4 spaces at cursor
+                    if (!e.shiftKey) {
+                        // Tab: Insert spaces
+                        const indent = '    ';
+                        textarea.value = value.substring(0, start) + indent + value.substring(end);
+                        textarea.selectionStart = textarea.selectionEnd = start + indent.length;
+                    } else {
+                        // Shift+Tab: Remove up to 4 spaces before cursor
+                        const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+                        const beforeCursor = value.substring(lineStart, start);
+                        const spacesToRemove = Math.min(4, beforeCursor.match(/^ */)[0].length);
+                        if (spacesToRemove > 0) {
+                            textarea.value = value.substring(0, lineStart) +
+                                           value.substring(lineStart + spacesToRemove);
+                            textarea.selectionStart = textarea.selectionEnd = start - spacesToRemove;
+                        }
+                    }
+                } else {
+                    // Has selection - indent/dedent all selected lines
+                    const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+                    const lineEnd = value.indexOf('\n', end);
+                    const selectedLines = value.substring(lineStart, lineEnd === -1 ? value.length : lineEnd);
+
+                    let newLines;
+                    if (!e.shiftKey) {
+                        // Tab: Add 4 spaces to each line
+                        newLines = selectedLines.split('\n').map(line => '    ' + line).join('\n');
+                    } else {
+                        // Shift+Tab: Remove up to 4 spaces from each line
+                        newLines = selectedLines.split('\n').map(line => {
+                            const match = line.match(/^( {1,4})/);
+                            return match ? line.substring(match[1].length) : line;
+                        }).join('\n');
+                    }
+
+                    textarea.value = value.substring(0, lineStart) + newLines +
+                                   value.substring(lineEnd === -1 ? value.length : lineEnd);
+
+                    // Restore selection
+                    textarea.selectionStart = lineStart;
+                    textarea.selectionEnd = lineStart + newLines.length;
+                }
+
+                // Trigger input event to update syntax highlighting
+                textarea.dispatchEvent(new Event('input'));
+                return;
             }
         });
         // Track last focused cell for toolbar run button
@@ -3414,6 +3575,9 @@ class SingleCellAnalysis {
 
             // Update cell number to complete state if not already done
             this.updateCellNumber(cellId, 'complete');
+
+            // Auto-refresh variable viewer and kernel stats after execution
+            this.refreshKernelInfo();
         })
         .catch(error => {
             // Hide interrupt button and stop polling
@@ -3483,6 +3647,66 @@ class SingleCellAnalysis {
                 this.executionAbortController.abort();
             }
         });
+    }
+
+    restartKernel() {
+        // Confirm restart
+        if (!confirm('Are you sure you want to restart the kernel? All variables will be lost.')) {
+            return;
+        }
+
+        const restartBtn = document.getElementById('restart-kernel-btn');
+        if (restartBtn) {
+            restartBtn.disabled = true;
+            restartBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
+
+        this.addToLog('Restarting kernel...');
+
+        const kernelId = this.getActiveKernelId();
+
+        fetch('/api/kernel/restart', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                kernel_id: kernelId
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Kernel restart failed:', data.error);
+                this.addToLog('Kernel restart failed: ' + data.error, 'error');
+            } else {
+                this.addToLog('Kernel restarted successfully');
+
+                // Clear all cell execution numbers
+                this.codeCells.forEach(cellId => {
+                    this.updateCellNumber(cellId, 'idle');
+                });
+
+                // Refresh variable viewer and kernel stats
+                this.refreshKernelInfo();
+            }
+        })
+        .catch(error => {
+            console.error('Kernel restart request failed:', error);
+            this.addToLog('Kernel restart failed: ' + error.message, 'error');
+        })
+        .finally(() => {
+            if (restartBtn) {
+                restartBtn.disabled = false;
+                restartBtn.innerHTML = '<i class="fas fa-redo"></i>';
+            }
+        });
+    }
+
+    refreshKernelInfo() {
+        // Refresh both variable viewer and kernel stats
+        this.fetchKernelVars();
+        this.fetchKernelStats();
     }
 
     showInterruptButton() {
