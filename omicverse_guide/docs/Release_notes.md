@@ -704,11 +704,19 @@ ov.alignment.single(
 ### PP Module
 - Fixed an HVG (Highly Variable Genes) selection issue in `ov.pp.preprocess`
 - Improved preprocessing pipeline stability and accuracy
-- Fixed pca gpu mode supporting with sparse matrix to avoid memory error
+- Refactored PCA implementation to utilize `torch_pca` for GPU acceleration (replacing TorchDR)
+- Enhanced support for sparse matrices in PCA computation
+- Updated PCA embedding basis from `X_pca` to `PCA` for clarity and consistency
+- Improved error handling with try-except blocks in PCA computation
+- Fixed PCA GPU mode support with sparse matrices to avoid memory errors
 
 ### Single Module
 - Added `CONCORD` method to `ov.single.batch_correction` for single-cell data integration
 - Enhanced batch correction capabilities with state-of-the-art algorithm
+- **Fixed critical performance issue in pySCENIC**: Reverted inefficient correlation calculation optimization that caused memory issues and slowdowns in scRNA-seq data
+- Removed misleading warnings about dropout genes in SCENIC correlation calculations
+- Restored memory-efficient pairwise correlation computation (prevents OOM with >20k genes)
+- SCENIC now uses original approach: calculate correlations only for specific TF-target pairs instead of creating full gene×gene matrices
 
 ### Space Module
 - Added `FlashDeconv` for fast, GPU-free deconvolution in Visium spatial transcriptomics
@@ -748,5 +756,39 @@ ov.alignment.single(
 - Fixed compatibility issues with latest package versions (zarr, pandas, etc.)
 - Improved error handling in parallel processing functions
 
+### Compatibility
+**NumPy 2.0 Compatibility**: Fixed all NPY201 compatibility issues to ensure seamless support for both NumPy 1.x and 2.x
+
+**Fixed Issues (31 total)**:
+
+1. **`np.in1d` → `np.isin`** (9 instances)
+   - `omicverse/bulk/_dynamicTree.py`: 3 instances (lines 697, 741)
+   - `omicverse/single/_cosg.py`: 1 instance (line 77)
+   - `omicverse/external/GNTD/_preprocessing.py`: 2 instances
+   - `omicverse/external/scdiffusion/guided_diffusion/cell_datasets_WOT.py`: 1 instance
+   - Other external modules: 2 instances
+
+2. **`np.row_stack` → `np.vstack`** (13 instances)
+   - `omicverse/external/CAST/CAST_Projection.py`: 2 instances
+   - `omicverse/external/CAST/visualize.py`: 2 instances
+   - `omicverse/external/scSLAT/viz/multi_dataset.py`: multiple instances
+   - `omicverse/single/_mdic3.py`: 1 instance
+
+3. **`np.product` → `np.prod`** (4 instances)
+   - `omicverse/external/umap_pytorch/model.py`: 2 instances
+   - `omicverse/external/umap_pytorch/modules.py`: 2 instances
+
+4. **`np.trapz` compatibility wrapper** (2 instances)
+   - Added compatibility wrapper in:
+     - `omicverse/external/VIA/plotting_via.py`
+     - `omicverse/external/VIA/plotting_via_ov.py`
+   - Uses `numpy.trapezoid` (NumPy 2.0+) with fallback to `numpy.trapz` (NumPy 1.x)
+
+**Backward Compatibility**:
+- ✅ All changes maintain full backward compatibility with NumPy 1.x (1.13+)
+- ✅ `np.isin` available since NumPy 1.13
+- ✅ `np.vstack` available in all NumPy versions
+- ✅ `np.prod` available in all NumPy versions
+- ✅ Custom compatibility wrapper handles `trapz`/`trapezoid` transition
 
 
