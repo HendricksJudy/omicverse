@@ -157,6 +157,7 @@ class SingleCellAnalysis {
                 'toolbar.clearAll': 'Clear all',
                 'toolbar.fontDown': 'Decrease font',
                 'toolbar.fontUp': 'Increase font',
+                'toolbar.interrupt': 'Interrupt',
                 'file.browser': 'File Browser',
                 'file.root': 'Working Directory',
                 'file.empty': 'Empty folder',
@@ -422,6 +423,7 @@ class SingleCellAnalysis {
                 'toolbar.clearAll': '清空所有',
                 'toolbar.fontDown': '减小字号',
                 'toolbar.fontUp': '增大字号',
+                'toolbar.interrupt': '中断',
                 'file.browser': '文件浏览器',
                 'file.root': '运行目录',
                 'file.empty': '空目录',
@@ -601,6 +603,7 @@ class SingleCellAnalysis {
                 , 'user.logout': '退出'
             }
         };
+        if (!key) return '';
         return (dict[this.currentLang] && dict[this.currentLang][key]) || key;
     }
 
@@ -3247,7 +3250,7 @@ class SingleCellAnalysis {
             if (highlightContainer) {
                 highlightContainer.style.height = textarea.style.height;
             }
-            if (cell.dataset.cellType === 'markdown') {
+            if (cellRoot && cellRoot.dataset.cellType === 'markdown') {
                 this.resizeMarkdownEditor(textarea);
             }
         };

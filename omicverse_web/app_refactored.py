@@ -303,7 +303,7 @@ def execute_code_stream():
                     if item[0] == 'done':
                         break
                     stream_type, text = item
-                    yield f"data: {json.dumps({'type': stream_type, 'text': text})}\n\n"
+                    yield f"data: {json.dumps({'type': stream_type, 'content': text})}\n\n"
                 except queue.Empty:
                     yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                     if execution_result['done']:
@@ -313,20 +313,17 @@ def execute_code_stream():
 
             # Send completion
             if execution_result['error']:
-                yield f"data: {json.dumps({'type': 'error', 'text': execution_result['error']})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'content': execution_result['error']})}\n\n"
             else:
                 result_data = {
                     'type': 'complete',
-                    'output': execution_result['result'].get('output', '') if execution_result['result'] else '',
-                    'error': execution_result['result'].get('error') if execution_result['result'] else None,
                     'figures': execution_result['figures'],
-                    'data_updated': execution_result['data_info'] is not None,
                     'data_info': execution_result['data_info']
                 }
                 yield f"data: {json.dumps(result_data)}\n\n"
 
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'text': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
