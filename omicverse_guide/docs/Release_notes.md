@@ -756,6 +756,25 @@ ov.alignment.single(
 - Fixed compatibility issues with latest package versions (zarr, pandas, etc.)
 - Improved error handling in parallel processing functions
 
+### Single Module
+**Enhanced DEG Analysis with Expression Percentages**: Added cell expression percentage information to differential expression results
+
+- Added `pct_ctrl` column showing percentage of cells expressing each gene in control group (0-100%)
+- Added `pct_test` column showing percentage of cells expressing each gene in test group (0-100%)
+- Added `pct_diff` column showing the difference in expression percentage (pct_test - pct_ctrl)
+- Works with all DEG methods: `wilcoxon`, `t-test`, and `memento-de`
+- Enables better marker gene identification by filtering genes based on expression prevalence
+- Similar to dotplot circle size information, helps identify genes with widespread vs. sparse expression patterns
+
+**Example Usage**:
+```python
+deg_obj = ov.single.DEG(adata, condition='condition',
+                        ctrl_group='Control', test_group='Treatment')
+deg_obj.run(celltype_key='cell_label', celltype_group=['T_cells'])
+results = deg_obj.get_results()
+# Now includes pct_ctrl, pct_test, pct_diff columns
+```
+
 ### Compatibility
 **NumPy 2.0 Compatibility**: Fixed all NPY201 compatibility issues to ensure seamless support for both NumPy 1.x and 2.x
 

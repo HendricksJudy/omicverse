@@ -315,10 +315,18 @@ def execute_code_stream():
             if execution_result['error']:
                 yield f"data: {json.dumps({'type': 'error', 'text': execution_result['error']})}\n\n"
             else:
+                # Convert result to string for JSON serialization
+                result_value = None
+                if execution_result['result']:
+                    raw_result = execution_result['result'].get('result')
+                    if raw_result is not None:
+                        result_value = str(raw_result)
+
                 result_data = {
                     'type': 'complete',
                     'output': execution_result['result'].get('output', '') if execution_result['result'] else '',
                     'error': execution_result['result'].get('error') if execution_result['result'] else None,
+                    'result': result_value,
                     'figures': execution_result['figures'],
                     'data_updated': execution_result['data_info'] is not None,
                     'data_info': execution_result['data_info']

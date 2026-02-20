@@ -3541,7 +3541,25 @@ class SingleCellAnalysis {
                                     figures: figures
                                 });
                             } else {
-                                const finalOutput = data.output || accumulatedOutput || this.t('status.noOutput');
+                                let finalOutput = data.output || accumulatedOutput || '';
+
+                                // Add result if present (like Jupyter's auto-display of last expression)
+                                if (data.result !== null && data.result !== undefined) {
+                                    const resultStr = String(data.result);
+                                    if (resultStr && resultStr !== 'None') {
+                                        if (finalOutput) {
+                                            finalOutput += '\n' + resultStr;
+                                        } else {
+                                            finalOutput = resultStr;
+                                        }
+                                    }
+                                }
+
+                                // If still no output, show success message
+                                if (!finalOutput && figures.length === 0) {
+                                    finalOutput = this.t('status.noOutput');
+                                }
+
                                 this.renderCodeOutput(outputDiv, {
                                     text: finalOutput,
                                     isError: false,
