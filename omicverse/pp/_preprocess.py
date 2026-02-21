@@ -7,7 +7,6 @@ from typing import Union, Tuple, Optional, Sequence, List, Dict
 import anndata
 import numpy as np
 import pandas as pd
-import skmisc.loess as sl
 import scanpy as sc
 import time 
 
@@ -360,6 +359,7 @@ def fit_loess(x: List[float], y: List[float], span: float, degree: int) -> objec
     A LOESS (Locally Weighted Regression) model is used to fit a given data set
     '''
     try:
+        import skmisc.loess as sl
         lobj = sl.loess(x, y, span=span, degree=degree)
         lobj.fit()
         return lobj
