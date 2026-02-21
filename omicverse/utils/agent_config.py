@@ -68,6 +68,15 @@ class MCPConfig:
     biocontext_mode: str = "remote"   # "remote" | "local" | "auto"
     cache_ttl: int = 3600             # seconds before cached result expires
     inject_tools_in_prompt: bool = True
+    auto_discover_servers: bool = False
+    registry_url: str = "https://biocontext.ai/api/registry"
+
+
+@dataclass
+class SelectionConfig:
+    """Tool selection strategy configuration."""
+    use_llm_selector: bool = True        # Use LLM for unified tool selection
+    fallback_to_keywords: bool = True    # Fall back to keywords if LLM fails
 
 
 @dataclass
@@ -78,6 +87,7 @@ class AgentConfig:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    selection: SelectionConfig = field(default_factory=SelectionConfig)
     verbose: bool = True
     history_enabled: bool = False
     history_path: Optional[Path] = None

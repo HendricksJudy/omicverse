@@ -131,6 +131,10 @@ from .context_compactor import ContextCompactor, estimate_tokens
 from .session_history import SessionHistory, HistoryEntry
 from .mcp_client import MCPClientManager, MCPTool, MCPServerInfo
 from .biocontext_bridge import BioContextBridge
+from .tool_catalog import ToolCatalog, CatalogEntry
+from .llm_tool_selector import LLMToolSelector, ToolSelectionResult
+from .mcp_registry import MCPServerRegistry, MCPServerDescriptor
+from .agent_config import SelectionConfig
 
 # Python 3.10 compatibility: Provide __getattr__ to dynamically return verifier
 # This ensures getattr(omicverse.utils, 'verifier') works in unittest.mock.patch
@@ -286,4 +290,15 @@ __all__ = [
     "MCPServerInfo",
     # @ biocontext_bridge
     "BioContextBridge",
+    # @ tool_catalog
+    "ToolCatalog",
+    "CatalogEntry",
+    # @ llm_tool_selector
+    "LLMToolSelector",
+    "ToolSelectionResult",
+    # @ mcp_registry
+    "MCPServerRegistry",
+    "MCPServerDescriptor",
+    # @ agent_config (new)
+    "SelectionConfig",
 ]

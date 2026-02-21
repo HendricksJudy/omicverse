@@ -87,6 +87,11 @@ from .skill_registry import (
 # Reference: https://blog.langchain.com/how-agents-can-use-filesystems-for-context-engineering/
 from .filesystem_context import FilesystemContextManager
 
+# P0: Unified tool catalog and LLM-driven tool selection
+from .tool_catalog import ToolCatalog, CatalogEntry
+from .llm_tool_selector import LLMToolSelector, ToolSelectionResult
+from .mcp_registry import MCPServerRegistry
+
 
 logger = logging.getLogger(__name__)
 
@@ -472,7 +477,13 @@ class OmicVerseAgent:
             # Initialize MCP connections if configured
             self._mcp_manager = None
             self._biocontext = None
+            self._mcp_registry = MCPServerRegistry()
             self._init_mcp()
+
+            # Initialize unified tool catalog and LLM-driven selector
+            self._tool_catalog: Optional[ToolCatalog] = None
+            self._tool_selector: Optional[LLMToolSelector] = None
+            self._init_tool_catalog()
 
             print(f"✅ Smart Agent initialized successfully!")
         except Exception as e:
@@ -511,6 +522,56 @@ class OmicVerseAgent:
         else:
             self.skill_registry = None
             self._skill_overview_text = ""
+
+    def _init_tool_catalog(self) -> None:
+        """Build the unified tool catalog and LLM tool selector."""
+        try:
+            self._tool_catalog = ToolCatalog(
+                skill_registry=self.skill_registry,
+                mcp_manager=self._mcp_manager,
+                function_registry=_global_registry,
+            )
+
+            # Add MCP tool previews from unconnected servers
+            if self._mcp_registry:
+                for preview in self._mcp_registry.get_tool_previews():
+                    self._tool_catalog.add_entry(CatalogEntry(
+                        name=preview["name"],
+                        slug=preview["name"],
+                        category="mcp_tool",
+                        description=preview.get("description", ""),
+                        source=preview.get("server_name", "unknown"),
+                        requires_connection=True,
+                    ))
+
+            # Build selector if LLM is available and selection config allows it
+            selection_cfg = getattr(self._config, "selection", None)
+            use_llm = getattr(selection_cfg, "use_llm_selector", True) if selection_cfg else True
+            fallback = getattr(selection_cfg, "fallback_to_keywords", True) if selection_cfg else True
+
+            if use_llm and self._llm:
+                self._tool_selector = LLMToolSelector(
+                    self._tool_catalog,
+                    self._llm,
+                    fallback_to_keywords=fallback,
+                )
+                catalog_size = len(self._tool_catalog)
+                print(f"   🎯 Unified tool catalog: {catalog_size} entries (LLM-driven selection)")
+            else:
+                self._tool_selector = None
+                print(f"   🎯 Tool catalog built ({len(self._tool_catalog)} entries, keyword fallback)")
+
+        except Exception as exc:
+            logger.warning("Failed to initialize tool catalog: %s", exc)
+            self._tool_catalog = None
+            self._tool_selector = None
+
+    def _rebuild_tool_catalog_mcp(self) -> None:
+        """Rebuild MCP entries in the tool catalog after connect/disconnect."""
+        if self._tool_catalog and self._mcp_manager:
+            self._tool_catalog.rebuild_mcp_entries(self._mcp_manager)
+            if self._tool_selector:
+                self._tool_selector.refresh_catalog()
 
     def _get_registry_stats(self) -> dict:
         """Get statistics about the function registry."""
@@ -777,6 +838,9 @@ You can reference previous results without explicitly searching:
                 self._setup_agent()
         except Exception as exc:
             logger.warning("Failed to rebuild agent prompt after MCP connect: %s", exc)
+
+        # Rebuild tool catalog to include newly connected MCP tools
+        self._rebuild_tool_catalog_mcp()
 
         return True
 
@@ -1567,7 +1631,7 @@ Now generate code for: "{request}"
 
             raise ValueError(f"Priority 1 execution failed: {e}") from e
 
-    async def _run_skills_workflow(self, request: str, adata: Any) -> Any:
+    async def _run_skills_workflow(self, request: str, adata: Any, *, pre_selected_skills: Optional[List[str]] = None) -> Any:
         """
         Execute Priority 2: Skills-guided workflow for complex tasks.
 
@@ -1581,6 +1645,9 @@ Now generate code for: "{request}"
             The user's natural language request (pre-classified as complex)
         adata : Any
             AnnData object to process
+        pre_selected_skills : list[str], optional
+            Skill slugs already selected by the unified LLMToolSelector.
+            When provided, skips the separate skill matching LLM call.
 
         Returns
         -------
@@ -1597,7 +1664,7 @@ Now generate code for: "{request}"
         Notes
         -----
         This is the Priority 2 comprehensive path that:
-        - Matches relevant skills using LLM
+        - Uses pre-selected skills from unified selector (or matches via LLM)
         - Loads full skill guidance (lazy loading)
         - Injects both registry + skills into prompt
         - Generates multi-step code
@@ -1608,9 +1675,16 @@ Now generate code for: "{request}"
 
         print(f"🧠 Priority 2: Skills-guided workflow for complex tasks")
 
-        # Step 1: Match relevant skills using LLM
-        print(f"   🎯 Matching relevant skills...")
-        matched_skill_slugs = await self._select_skill_matches_llm(request, top_k=2)
+        # Step 1: Use pre-selected skills or match via LLM
+        if pre_selected_skills is not None:
+            matched_skill_slugs = pre_selected_skills
+            if matched_skill_slugs:
+                print(f"   🎯 Using pre-selected skills from unified selector")
+            else:
+                print(f"   🎯 No skills selected by unified selector")
+        else:
+            print(f"   🎯 Matching relevant skills...")
+            matched_skill_slugs = await self._select_skill_matches_llm(request, top_k=2)
 
         # Step 2: Load full content for matched skills (lazy loading)
         skill_matches = []
@@ -3251,17 +3325,40 @@ if 'batch' in adata.obs.columns:
         if self.provider == "python":
             raise ValueError("Python provider requires executable Python code in the request.")
 
-        # Step 1: Analyze task complexity + MCP need (single LLM call)
+        # Step 1: Unified tool selection (single LLM call for complexity + skills + MCP)
         print(f"📊 Analyzing task...")
-        analysis = await self._analyze_task_complexity(request)
-        complexity = analysis["complexity"]
-        needs_mcp = analysis.get("needs_mcp", False)
-        print(f"   Complexity: {complexity.upper()}")
-        if needs_mcp:
-            print(f"   External databases: needed")
+        adata_summary = f"{adata.shape[0]} cells x {adata.shape[1]} genes"
+        selection: Optional[ToolSelectionResult] = None
+
+        if self._tool_selector:
+            try:
+                selection = await self._tool_selector.select(request, adata_summary)
+                complexity = selection.complexity
+                needs_mcp = selection.needs_external_db
+                matched_skills = selection.selected_skills
+                print(f"   Complexity: {complexity.upper()}")
+                if matched_skills:
+                    print(f"   Matched skills: {', '.join(matched_skills)}")
+                if needs_mcp:
+                    print(f"   External databases: needed")
+                if selection.reasoning:
+                    print(f"   Reasoning: {selection.reasoning}")
+            except Exception as exc:
+                logger.warning("Unified selector failed, falling back: %s", exc)
+                selection = None
+
+        if selection is None:
+            # Fallback to legacy analysis
+            analysis = await self._analyze_task_complexity(request)
+            complexity = analysis["complexity"]
+            needs_mcp = analysis.get("needs_mcp", False)
+            matched_skills = []
+            print(f"   Complexity: {complexity.upper()}")
+            if needs_mcp:
+                print(f"   External databases: needed")
         print()
 
-        # Step 1b: Auto-connect BioContext if the LLM determined it's needed
+        # Step 1b: Auto-connect BioContext if external DB is needed
         if needs_mcp:
             bc_already = self._biocontext and self._biocontext.is_connected
             if not bc_already:
@@ -3323,7 +3420,9 @@ if 'batch' in adata.obs.columns:
             print()
 
         try:
-            result = await self._run_skills_workflow(request, adata)
+            # Pass pre-selected skills from unified selector to avoid duplicate LLM call
+            pre_selected = matched_skills if selection is not None else None
+            result = await self._run_skills_workflow(request, adata, pre_selected_skills=pre_selected)
             priority_used = 2
 
             print()
@@ -3681,8 +3780,22 @@ IMPORTANT: Respond with ONLY the JSON array, nothing else."""
         ...         print(f"Tokens used: {event['content'].total_tokens}")
         """
 
-        # Determine which project skills are relevant to this request
-        skill_matches = self._select_skill_matches(request, top_k=2)
+        # Determine which project skills are relevant using unified selector
+        skill_matches = []
+        if self._tool_selector:
+            try:
+                adata_summary = f"{adata.shape[0]} cells x {adata.shape[1]} genes"
+                selection = await self._tool_selector.select(request, adata_summary)
+                if selection.selected_skills:
+                    for slug in selection.selected_skills:
+                        full_skill = self.skill_registry.load_full_skill(slug) if self.skill_registry else None
+                        if full_skill:
+                            skill_matches.append(SkillMatch(skill=full_skill, score=1.0))
+                if selection.needs_external_db:
+                    self._lazy_connect_biocontext()
+            except Exception as exc:
+                logger.warning("Unified selector failed in stream_async: %s", exc)
+
         if skill_matches:
             yield {
                 'type': 'skill_match',

@@ -438,9 +438,23 @@ class SkillRegistry:
 
 
 class SkillRouter:
-    """Simple keyword-based router that ranks skills for a query."""
+    """DEPRECATED: Keyword-based router that ranks skills for a query.
+
+    .. deprecated::
+        Use :class:`~omicverse.utils.llm_tool_selector.LLMToolSelector` for
+        intelligent, LLM-driven skill matching.  ``SkillRouter`` used cosine
+        similarity on token frequencies and has been superseded by the unified
+        tool selection system.  It will be removed in a future version.
+    """
 
     def __init__(self, registry: SkillRegistry, min_score: float = 0.1):
+        import warnings
+        warnings.warn(
+            "SkillRouter is deprecated. Use LLMToolSelector for intelligent "
+            "skill matching. SkillRouter will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.registry = registry
         self.min_score = min_score
         self._skill_vectors: Dict[str, Dict[str, int]] = {}
