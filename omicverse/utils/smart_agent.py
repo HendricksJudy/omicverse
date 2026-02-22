@@ -256,7 +256,7 @@ class OmicVerseAgent:
         result_adata = agent.run("quality control with nUMI>500, mito<0.2", adata)
     """
     
-    def __init__(self, model: str = "gemini-2.5-flash", api_key: Optional[str] = None, endpoint: Optional[str] = None, enable_reflection: bool = True, reflection_iterations: int = 1, enable_result_review: bool = True, use_notebook_execution: bool = True, max_prompts_per_session: int = 5, notebook_storage_dir: Optional[str] = None, keep_execution_notebooks: bool = True, notebook_timeout: int = 600, strict_kernel_validation: bool = True, enable_filesystem_context: bool = True, context_storage_dir: Optional[str] = None, enable_mcp: bool = False, mcp_servers: Optional[List] = None, *, config: Optional[AgentConfig] = None, reporter: Optional[Reporter] = None, verbose: bool = True):
+    def __init__(self, model: str = "gemini-2.5-flash", api_key: Optional[str] = None, endpoint: Optional[str] = None, enable_reflection: bool = True, reflection_iterations: int = 1, enable_result_review: bool = True, use_notebook_execution: bool = True, max_prompts_per_session: int = 5, notebook_storage_dir: Optional[str] = None, keep_execution_notebooks: bool = True, notebook_timeout: int = 600, strict_kernel_validation: bool = True, enable_filesystem_context: bool = True, context_storage_dir: Optional[str] = None, enable_mcp: bool = True, mcp_servers: Optional[List] = None, *, config: Optional[AgentConfig] = None, reporter: Optional[Reporter] = None, verbose: bool = True):
         """
         Initialize the OmicVerse Smart Agent.
 
@@ -298,7 +298,8 @@ class OmicVerseAgent:
             Enable BioContext MCP integration to enrich code generation with
             biological context from external knowledge databases (STRING, Reactome,
             Open Targets, etc.).  Requires ``pip install 'mcp>=1.8.0'``.
-            Default: False (opt-in).
+            Default: True (enabled by default; gracefully degrades if mcp
+            package is not installed).
         mcp_servers : list, optional
             List of ``MCPServerConfig`` objects specifying which MCP servers to
             connect to.  When ``None``, the BioContextAI Knowledgebase server

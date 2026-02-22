@@ -127,7 +127,7 @@ def _default_servers() -> List[MCPServerConfig]:
 class MCPConfig:
     """MCP integration settings for the OmicVerse Agent."""
 
-    enabled: bool = False  # opt-in
+    enabled: bool = True  # enabled by default
     servers: List[MCPServerConfig] = field(default_factory=_default_servers)
     max_tools_per_query: int = 3  # max MCP tool calls per user request
     max_context_tokens: int = 2000  # approximate token budget for MCP context

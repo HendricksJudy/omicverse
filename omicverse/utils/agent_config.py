@@ -88,7 +88,7 @@ class AgentConfig:
 
         # Build MCPConfig from flat kwargs
         from .mcp_config import MCPConfig, MCPServerConfig, _default_servers
-        enable_mcp = kw.get("enable_mcp", False)
+        enable_mcp = kw.get("enable_mcp", True)
         mcp_servers = kw.get("mcp_servers", None)
         mcp_cfg = MCPConfig(
             enabled=enable_mcp,

@@ -78,9 +78,9 @@ agent_config_mod = _load_module("agent_config", "agent_config.py")
 
 class TestMCPConfig:
 
-    def test_default_config_disabled(self):
+    def test_default_config_enabled(self):
         cfg = mcp_config_mod.MCPConfig()
-        assert cfg.enabled is False
+        assert cfg.enabled is True
         assert cfg.max_tools_per_query == 3
         assert cfg.max_context_tokens == 2000
 
@@ -297,11 +297,11 @@ class TestMCPContextEnricher:
 
 class TestAgentConfigMCP:
 
-    def test_default_mcp_disabled(self):
-        """Default AgentConfig should have MCP disabled."""
+    def test_default_mcp_enabled(self):
+        """Default AgentConfig should have MCP enabled."""
         cfg = agent_config_mod.AgentConfig()
         assert cfg.mcp is not None
-        assert cfg.mcp.enabled is False
+        assert cfg.mcp.enabled is True
 
     def test_from_flat_kwargs_enable_mcp(self):
         """from_flat_kwargs with enable_mcp=True should enable MCP."""
