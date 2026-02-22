@@ -256,7 +256,7 @@ class OmicVerseAgent:
         result_adata = agent.run("quality control with nUMI>500, mito<0.2", adata)
     """
     
-    def __init__(self, model: str = "gemini-2.5-flash", api_key: Optional[str] = None, endpoint: Optional[str] = None, enable_reflection: bool = True, reflection_iterations: int = 1, enable_result_review: bool = True, use_notebook_execution: bool = True, max_prompts_per_session: int = 5, notebook_storage_dir: Optional[str] = None, keep_execution_notebooks: bool = True, notebook_timeout: int = 600, strict_kernel_validation: bool = True, enable_filesystem_context: bool = True, context_storage_dir: Optional[str] = None, *, config: Optional[AgentConfig] = None, reporter: Optional[Reporter] = None, verbose: bool = True):
+    def __init__(self, model: str = "gemini-2.5-flash", api_key: Optional[str] = None, endpoint: Optional[str] = None, enable_reflection: bool = True, reflection_iterations: int = 1, enable_result_review: bool = True, use_notebook_execution: bool = True, max_prompts_per_session: int = 5, notebook_storage_dir: Optional[str] = None, keep_execution_notebooks: bool = True, notebook_timeout: int = 600, strict_kernel_validation: bool = True, enable_filesystem_context: bool = True, context_storage_dir: Optional[str] = None, enable_mcp: bool = False, mcp_servers: Optional[List] = None, *, config: Optional[AgentConfig] = None, reporter: Optional[Reporter] = None, verbose: bool = True):
         """
         Initialize the OmicVerse Smart Agent.
 
@@ -294,6 +294,15 @@ class OmicVerseAgent:
             selective context retrieval. Default: True.
         context_storage_dir : str, optional
             Directory for storing context files. Defaults to ~/.ovagent/context/
+        enable_mcp : bool, optional
+            Enable BioContext MCP integration to enrich code generation with
+            biological context from external knowledge databases (STRING, Reactome,
+            Open Targets, etc.).  Requires ``pip install 'mcp>=1.8.0'``.
+            Default: False (opt-in).
+        mcp_servers : list, optional
+            List of ``MCPServerConfig`` objects specifying which MCP servers to
+            connect to.  When ``None``, the BioContextAI Knowledgebase server
+            (52 tools) is used by default.
         config : AgentConfig, optional
             Grouped configuration object.  When provided, its values take priority
             over the flat keyword arguments above.
@@ -323,6 +332,8 @@ class OmicVerseAgent:
                 strict_kernel_validation=strict_kernel_validation,
                 enable_filesystem_context=enable_filesystem_context,
                 context_storage_dir=context_storage_dir,
+                enable_mcp=enable_mcp,
+                mcp_servers=mcp_servers,
             )
             self._config.verbose = verbose
 
@@ -376,6 +387,9 @@ class OmicVerseAgent:
         # Filesystem context configuration (set early to avoid AttributeError)
         self.enable_filesystem_context = enable_filesystem_context
         self._filesystem_context: Optional[FilesystemContextManager] = None
+        # MCP integration (set early to avoid AttributeError)
+        self._mcp_client = None
+        self._mcp_enricher = None
         # Token usage tracking at agent level
         self.last_usage = None
         self.last_usage_breakdown: Dict[str, Any] = {
@@ -468,6 +482,26 @@ class OmicVerseAgent:
                     print(f"   ⚠️  Filesystem context disabled (init failed: {e})")
             else:
                 print(f"   ⚡ Filesystem context disabled")
+
+            # Initialize BioContext MCP integration (attributes already set early)
+            if self._config.mcp and self._config.mcp.enabled:
+                try:
+                    from .mcp_client import BioContextMCPClient
+                    from .mcp_context_enricher import MCPContextEnricher
+
+                    active = self._config.mcp.active_servers()
+                    self._mcp_client = BioContextMCPClient(active)
+                    self._mcp_enricher = MCPContextEnricher(
+                        self._mcp_client, self._llm, self._config.mcp,
+                    )
+                    server_names = ", ".join(s.name for s in active)
+                    print(f"   🌐 BioContext MCP enabled: {len(active)} server(s) ({server_names})")
+                except ImportError as e:
+                    logger.warning("MCP integration disabled: %s", e)
+                    print(f"   ⚠️  MCP disabled (missing dependency: {e})")
+                except Exception as e:
+                    logger.warning("MCP initialization failed: %s", e)
+                    print(f"   ⚠️  MCP disabled (init failed: {e})")
 
             print(f"✅ Smart Agent initialized successfully!")
         except Exception as e:
@@ -1114,7 +1148,7 @@ Respond with ONLY one word: either "simple" or "complex"
             logger.warning(f"Complexity classification failed: {exc}, defaulting to 'complex'")
             return 'complex'
 
-    async def _run_registry_workflow(self, request: str, adata: Any) -> Any:
+    async def _run_registry_workflow(self, request: str, adata: Any, *, mcp_context: str = "") -> Any:
         """
         Execute Priority 1: Fast registry-based workflow for simple tasks.
 
@@ -1128,6 +1162,8 @@ Respond with ONLY one word: either "simple" or "complex"
             The user's natural language request (pre-classified as simple)
         adata : Any
             AnnData object to process
+        mcp_context : str, optional
+            Biological context retrieved from BioContext MCP servers.
 
         Returns
         -------
@@ -1158,6 +1194,11 @@ Respond with ONLY one word: either "simple" or "complex"
         # Build registry-only prompt (no skills, focused on single function)
         functions_info = self._get_available_functions_info()
 
+        # Optional MCP biological context section
+        mcp_section = ""
+        if mcp_context:
+            mcp_section = f"\n{mcp_context}\n"
+
         priority1_prompt = f"""You are a fast function executor for OmicVerse. Your task is to find and execute the SINGLE BEST function for this request.
 
 Request: "{request}"
@@ -1167,6 +1208,7 @@ Dataset info:
 
 Available OmicVerse Functions (Registry):
 {functions_info}
+{mcp_section}
 
 INSTRUCTIONS:
 1. This is a SIMPLE task requiring ONE function call (or at most 2-3 closely related calls)
@@ -1344,7 +1386,7 @@ Now generate code for: "{request}"
 
             raise ValueError(f"Priority 1 execution failed: {e}") from e
 
-    async def _run_skills_workflow(self, request: str, adata: Any) -> Any:
+    async def _run_skills_workflow(self, request: str, adata: Any, *, mcp_context: str = "") -> Any:
         """
         Execute Priority 2: Skills-guided workflow for complex tasks.
 
@@ -1358,6 +1400,8 @@ Now generate code for: "{request}"
             The user's natural language request (pre-classified as complex)
         adata : Any
             AnnData object to process
+        mcp_context : str, optional
+            Biological context retrieved from BioContext MCP servers.
 
         Returns
         -------
@@ -1407,8 +1451,13 @@ Now generate code for: "{request}"
                 f"{skill_guidance_text}\n"
             )
 
-        # Step 3: Build comprehensive prompt (registry + skills)
+        # Step 3: Build comprehensive prompt (registry + skills + MCP context)
         functions_info = self._get_available_functions_info()
+
+        # Optional MCP biological context section
+        mcp_section = ""
+        if mcp_context:
+            mcp_section = f"\n{mcp_context}\n"
 
         priority2_prompt = f'''You are a workflow orchestrator for OmicVerse. This is a COMPLEX task requiring multiple steps.
 
@@ -1420,6 +1469,7 @@ Dataset info:
 Available OmicVerse Functions (Registry):
 {functions_info}
 {skill_guidance_section}
+{mcp_section}
 
 INSTRUCTIONS:
 1. This is a COMPLEX task - generate a complete multi-step workflow
@@ -3008,6 +3058,27 @@ if 'batch' in adata.obs.columns:
         print(f"   Classification: {complexity.upper()}")
         print()
 
+        # Step 1.5: MCP context enrichment (if enabled)
+        mcp_context = ""
+        if self._mcp_enricher is not None:
+            print(f"🌐 Querying biological context from MCP servers...")
+            try:
+                adata_meta = {
+                    "shape": adata.shape,
+                    "var_names": list(adata.var_names[:20]),
+                    "obs_columns": list(adata.obs.columns),
+                }
+                with self._temporary_api_keys():
+                    mcp_context = await self._mcp_enricher.enrich(request, adata_meta)
+                if mcp_context:
+                    print(f"   ✅ Retrieved biological context ({len(mcp_context)} chars)")
+                else:
+                    print(f"   ℹ️  No additional biological context needed for this request")
+            except Exception as e:
+                logger.warning("MCP context enrichment failed (non-fatal): %s", e)
+                print(f"   ⚠️  MCP enrichment skipped: {e}")
+            print()
+
         # Track which priority was used for metrics
         priority_used = None
         fallback_occurred = False
@@ -3019,7 +3090,7 @@ if 'batch' in adata.obs.columns:
 
             try:
                 # Attempt fast registry workflow
-                result = await self._run_registry_workflow(request, adata)
+                result = await self._run_registry_workflow(request, adata, mcp_context=mcp_context)
                 priority_used = 1
 
                 print()
@@ -3063,7 +3134,7 @@ if 'batch' in adata.obs.columns:
             print()
 
         try:
-            result = await self._run_skills_workflow(request, adata)
+            result = await self._run_skills_workflow(request, adata, mcp_context=mcp_context)
             priority_used = 2
 
             print()
@@ -3572,6 +3643,16 @@ Example workflow:
             return result_container.get("value")
 
         return asyncio.run(self.run_async(request, adata))
+
+    # ===================================================================
+    # MCP Cleanup
+    # ===================================================================
+
+    async def close_mcp(self) -> None:
+        """Disconnect from all MCP servers.  Safe to call even when MCP is
+        not enabled (no-op)."""
+        if self._mcp_client is not None:
+            await self._mcp_client.disconnect_all()
 
     # ===================================================================
     # Session Management Methods

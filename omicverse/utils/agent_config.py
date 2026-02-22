@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 
 
 class SandboxFallbackPolicy(Enum):
@@ -70,6 +70,13 @@ class AgentConfig:
     verbose: bool = True
     history_enabled: bool = False
     history_path: Optional[Path] = None
+    # BioContext MCP integration (lazy import to avoid hard dependency)
+    mcp: Any = None  # MCPConfig instance; built by from_flat_kwargs or supplied directly
+
+    def __post_init__(self) -> None:
+        if self.mcp is None:
+            from .mcp_config import MCPConfig
+            self.mcp = MCPConfig()
 
     # --------------- backward-compat factory ---------------
 
@@ -78,6 +85,19 @@ class AgentConfig:
         """Build from the original OmicVerseAgent.__init__ keyword args."""
         sd = kw.get("notebook_storage_dir")
         cd = kw.get("context_storage_dir")
+
+        # Build MCPConfig from flat kwargs
+        from .mcp_config import MCPConfig, MCPServerConfig, _default_servers
+        enable_mcp = kw.get("enable_mcp", False)
+        mcp_servers = kw.get("mcp_servers", None)
+        mcp_cfg = MCPConfig(
+            enabled=enable_mcp,
+            servers=mcp_servers if mcp_servers is not None else _default_servers(),
+            max_tools_per_query=kw.get("mcp_max_tools", 3),
+            max_context_tokens=kw.get("mcp_max_context_tokens", 2000),
+            tool_call_timeout=kw.get("mcp_tool_timeout", 30),
+        )
+
         return cls(
             llm=LLMConfig(
                 model=kw.get("model", "gemini-2.5-flash"),
@@ -101,4 +121,5 @@ class AgentConfig:
                 enabled=kw.get("enable_filesystem_context", True),
                 storage_dir=Path(cd) if cd else None,
             ),
+            mcp=mcp_cfg,
         )
