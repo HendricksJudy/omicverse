@@ -26,6 +26,12 @@ def executor_and_security_config():
     omicverse_pkg.__file__ = str(PROJECT_ROOT / "omicverse" / "__init__.py")
     sys.modules.setdefault("omicverse", omicverse_pkg)
 
+    # Ensure __file__ is set on the real module (its custom __getattr__
+    # raises AttributeError for attributes not in its lazy-load map).
+    ov_mod = sys.modules["omicverse"]
+    if "__file__" not in vars(ov_mod):
+        ov_mod.__file__ = str(PROJECT_ROOT / "omicverse" / "__init__.py")
+
     utils_pkg = types.ModuleType("omicverse.utils")
     utils_pkg.__path__ = [str(PROJECT_ROOT / "omicverse" / "utils")]
     sys.modules.setdefault("omicverse.utils", utils_pkg)
@@ -74,11 +80,10 @@ def test_denylisted_import_cannot_be_unblocked_by_package_spoofing(sandbox_built
 
 
 def test_omicverse_internal_module_can_still_import_denylisted_module(sandbox_builtins):
-    # Derive path from the actual installed omicverse package so it matches
-    # the omicverse_root that build_sandbox_globals computes at runtime.
-    import omicverse as _ov
-
-    ov_root = Path(_ov.__file__).resolve().parent
+    # Use the same __file__ path that the fixture ensured is set on the
+    # omicverse module, matching what build_sandbox_globals uses.
+    ov_mod = sys.modules["omicverse"]
+    ov_root = Path(ov_mod.__file__).resolve().parent
     internal_path = str(ov_root / "biocontext" / "_client.py")
 
     internal_globals = {
