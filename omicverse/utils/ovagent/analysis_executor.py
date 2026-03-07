@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import inspect
 import json
 import logging
 import os
@@ -806,6 +807,12 @@ class AnalysisExecutor:
                 )
 
         allowed_modules["os"] = SafeOsProxy()
+        omicverse_module = allowed_modules.get("omicverse")
+        omicverse_root = None
+        if omicverse_module is not None:
+            module_file = getattr(omicverse_module, "__file__", None)
+            if module_file:
+                omicverse_root = Path(module_file).resolve().parent
 
         def _apply_scvi_shims() -> None:
             try:
@@ -832,8 +839,21 @@ class AnalysisExecutor:
         def limited_import(name, globals=None, locals=None, fromlist=(), level=0):
             root_name = name.split(".")[0]
             if root_name in deny_roots:
-                caller_pkg = (globals or {}).get("__package__", "") or ""
-                if not caller_pkg.startswith("omicverse"):
+                caller_frame = inspect.currentframe()
+                caller_frame = caller_frame.f_back if caller_frame else None
+                caller_globals = caller_frame.f_globals if caller_frame else {}
+                caller_name = str(caller_globals.get("__name__", "") or "")
+                caller_file = caller_frame.f_code.co_filename if caller_frame else ""
+                caller_path = Path(caller_file).resolve() if caller_file else None
+
+                trusted_internal_import = (
+                    omicverse_root is not None
+                    and caller_name.startswith("omicverse")
+                    and caller_path is not None
+                    and omicverse_root in caller_path.parents
+                )
+
+                if not trusted_internal_import:
                     raise ImportError(
                         f"Module '{name}' is blocked inside the OmicVerse agent sandbox."
                     )
