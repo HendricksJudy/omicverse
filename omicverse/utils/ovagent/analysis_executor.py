@@ -839,19 +839,18 @@ class AnalysisExecutor:
         def limited_import(name, globals=None, locals=None, fromlist=(), level=0):
             root_name = name.split(".")[0]
             if root_name in deny_roots:
-                caller_frame = inspect.currentframe()
-                caller_frame = caller_frame.f_back if caller_frame else None
-                caller_globals = caller_frame.f_globals if caller_frame else {}
-                caller_name = str(caller_globals.get("__name__", "") or "")
-                caller_file = caller_frame.f_code.co_filename if caller_frame else ""
-                caller_path = Path(caller_file).resolve() if caller_file else None
-
-                trusted_internal_import = (
-                    omicverse_root is not None
-                    and caller_name.startswith("omicverse")
-                    and caller_path is not None
-                    and omicverse_root in caller_path.parents
-                )
+                trusted_internal_import = False
+                try:
+                    caller_frame = inspect.currentframe()
+                    caller_frame = caller_frame.f_back if caller_frame else None
+                    if caller_frame and omicverse_root is not None:
+                        caller_file = caller_frame.f_code.co_filename
+                        caller_path = Path(caller_file).resolve()
+                        trusted_internal_import = caller_path.is_relative_to(
+                            omicverse_root
+                        )
+                except Exception:
+                    pass
 
                 if not trusted_internal_import:
                     raise ImportError(

@@ -74,12 +74,18 @@ def test_denylisted_import_cannot_be_unblocked_by_package_spoofing(sandbox_built
 
 
 def test_omicverse_internal_module_can_still_import_denylisted_module(sandbox_builtins):
+    # Derive path from the actual installed omicverse package so it matches
+    # the omicverse_root that build_sandbox_globals computes at runtime.
+    import omicverse as _ov
+
+    ov_root = Path(_ov.__file__).resolve().parent
+    internal_path = str(ov_root / "biocontext" / "_client.py")
+
     internal_globals = {
         "__builtins__": sandbox_builtins,
         "__name__": "omicverse.biocontext._client",
         "__package__": "omicverse.biocontext",
     }
-    internal_path = str((PROJECT_ROOT / "omicverse" / "biocontext" / "_client.py"))
     internal_code = compile("import urllib.request", internal_path, "exec")
 
     exec(internal_code, internal_globals, {})
