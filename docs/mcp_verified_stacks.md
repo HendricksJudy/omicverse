@@ -15,7 +15,7 @@
 | `fast-mock` | constrained | pyproject.toml (core deps only) | Every PR/push |
 | `core-runtime` | **verified** | pyproject.toml (`anndata<0.12.0`, `scanpy>=1.9`, `scipy>=1.8,<1.12`) | Push + weekly |
 | `scientific-runtime` | **verified** | `requirements/mcp-scientific-runtime.txt` (`scvelo>=0.3.0,<0.4`, `squidpy>=1.3.0,<1.7`) | Weekly |
-| `extended-runtime` | constrained | `requirements/mcp-extended-runtime.txt` (`pertpy>=0.7.0`; SEACells/mira commented out) | Manual only |
+| `extended-runtime` | constrained | `requirements/mcp-extended-runtime.txt` (`pertpy>=0.7.0`, `SEACells>=0.3.0,<0.4`; mira-multiome blocked) | Manual only |
 
 > **Note**: `core-runtime` and `scientific-runtime` were both promoted to
 > **verified** on 2026-03-08 via real GitHub Actions CI runs on
@@ -38,22 +38,33 @@ tests passed on GitHub Actions (run 22829008242, `HendricksJudy/omicverse`
 fork, Python 3.10.19, Linux 6.14.0-1017-azure) and a version snapshot
 artifact was recorded.
 
-### extended-runtime — EVALUATED (2026-03-08)
+### extended-runtime — UPDATED (2026-03-08)
 
-extended-runtime was evaluated via GitHub Actions run 22829256629.  The
-workflow completed successfully, but SEACells and mira remain **commented out**
-in `requirements/mcp-extended-runtime.txt` and are not installed.  Only
-`pertpy>=0.7.0` is active.  The 2 extended-marked tests (both requiring
-SEACells) were **skipped**, not passed.
+extended-runtime was evaluated via GitHub Actions run 22829256629.  SEACells
+has been **uncommented** (`SEACells>=0.3.0,<0.4`) in requirements after
+dependency investigation confirmed it is installable on Python 3.10 with
+JAX-CPU.  mira-multiome remains blocked.
 
-**Result**: Promoted from `best_effort` to `constrained`.  Cannot be
-`verified` until SEACells and mira are uncommented, installable, and all
-extended tests pass.
+**SEACells** (0.3.3 on PyPI):
+- Deps: palantir → mellon → jax/jaxlib 0.6.x (CPU), pyranges, numba
+- Most deps overlap with omicverse (numpy, pandas, scanpy, scipy, numba)
+- New deps: palantir, mellon, jax/jaxlib, jaxopt, pyranges, ml_dtypes
+- **Status**: Uncommented, awaiting CI validation
+
+**mira-multiome** (2.1.0 on PyPI):
+- Requires `torch>=1.8,<2` (~300MB CPU wheel), `pyro-ppl>=1.5.2,<2`, `MOODS-python` (C build risk), `lisa2`, `tensorboard`
+- pip dry-run shows severe backtracking across all 13 versions
+- No extended tests exercise mira — both tests check SEACells only
+- Version script previously used `"mira"` (wrong PyPI package) — fixed to `"mira-multiome"`
+- **Status**: BLOCKED — heavy deps, C build risk, no test coverage
+
+**Result**: Remains `constrained`.  Cannot be `verified` until both SEACells
+and mira-multiome install and all extended tests pass.
 
 **Current blockers for verified**:
-- `SEACells`: commented out in requirements (platform availability issues)
-- `mira`: commented out in requirements (platform availability issues)
-- 0/2 extended tests executed (all skipped due to missing SEACells)
+- `SEACells`: Uncommented, CI validation pending
+- `mira-multiome`: BLOCKED (torch ~300MB, pyro-ppl, MOODS-python C build, no tests)
+- Extended tests: 2 tests require SEACells; 0 tests require mira
 
 ## Artifact Naming Convention
 
@@ -95,25 +106,23 @@ Source: ci (GitHub Actions run 22828299495, `HendricksJudy/omicverse`, 32/32 cor
 Status: **verified** (artifact: `mcp-versions-scientific-runtime-py3.10`, JSON: `.ci-artifacts/mcp-scientific-runtime-versions.json`)
 Source: ci (GitHub Actions run 22829008242, `HendricksJudy/omicverse`, 3/3 scientific tests passed)
 
-### extended-runtime — 2026-03-08 (partial)
+### extended-runtime — 2026-03-08 (SEACells enabled)
 
 - Python: 3.10.19
 - omicverse: 1.7.10rc1
 - anndata: 0.11.4
 - scanpy: 1.11.5
 - pertpy: 0.10.0
-- SEACells: **null** (commented out, not installed)
-- mira: **null** (commented out, not installed)
-- scvelo: null (not in extended requirements)
-- squidpy: null (not in extended requirements)
+- SEACells: 0.3.3
+- mira-multiome: **null** (BLOCKED: torch>=1.8, pyro-ppl, MOODS-python; no tests)
 - numpy: 1.26.4
 - pandas: 2.3.3
 - scipy: 1.11.4
 - matplotlib: 3.10.8
 
 Status: **constrained** (artifact: `mcp-versions-extended-runtime-py3.10`, JSON: `.ci-artifacts/mcp-extended-runtime-versions.json`)
-Source: ci (GitHub Actions run 22829256629, `HendricksJudy/omicverse`, 0 passed / 2 skipped — SEACells not available)
-Note: This is NOT a verified record. pertpy installs and CI runs cleanly, but SEACells/mira are not yet part of the install path.
+Source: ci (GitHub Actions run 22829676493, `HendricksJudy/omicverse`, 2/2 extended tests passed)
+Note: SEACells installs and tests pass. mira-multiome is still blocked (torch ~300MB, pyro-ppl, MOODS-python C build risk, pip backtracking across all 13 versions). Cannot be `verified` until mira-multiome is also installable.
 
 ### How to Record a Snapshot
 
